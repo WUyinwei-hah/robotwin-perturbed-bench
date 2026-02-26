@@ -1,0 +1,11 @@
+# Motus policy configuration for perturbed benchmark
+robotwin_root: /gemini/code/robotwin
+policy_dir: /gemini/code/robotwin/policy/Motus
+
+# Model paths — update these to match your setup
+checkpoint_path: Motus_robotwin2
+wan_path: /gemini/code/models/Wan2.1-T2V-1.3B
+vlm_path: /gemini/code/models/umt5-xxl
+
+# Additional Motus-specific args
+device: cuda

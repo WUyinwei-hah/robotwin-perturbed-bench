@@ -1,0 +1,10 @@
+# LingbotVA policy configuration for perturbed benchmark
+# NOTE: The LingbotVA server must be launched separately before running.
+robotwin_root: /gemini/code/robotwin
+lingbot_va_root: /gemini/code/lingbot-va
+
+# Websocket server settings
+port: 8000
+video_guidance_scale: 5.0
+action_guidance_scale: 5.0
+save_visualization: false
