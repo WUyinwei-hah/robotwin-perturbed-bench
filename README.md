@@ -50,6 +50,133 @@ robotwin-perturbed-bench/
 └── script -> ../robotwin/script
 ```
 
+## Run on Another Machine (Full Setup Guide)
+
+This section is the recommended migration path after cloning from GitHub.
+
+### A. Recommended workspace layout
+
+Use the same parent folder for all related repos:
+
+```text
+<WORK_ROOT>/
+  robotwin/
+  robotwin-perturbed-bench/
+  lingbot-va/                  # only needed for LingbotVA policy
+  models/                      # optional but recommended central model folder
+```
+
+Example below uses `<WORK_ROOT>=/data/code`.
+
+### B. Clone required repositories
+
+```bash
+mkdir -p /data/code
+git clone https://github.com/RoboTwin-Platform/RoboTwin.git /data/code/robotwin
+git clone https://github.com/WUyinwei-hah/robotwin-perturbed-bench.git /data/code/robotwin-perturbed-bench
+
+# Optional: only if you need LingbotVA evaluation
+git clone <YOUR_LINGBOT_VA_REPO_URL> /data/code/lingbot-va
+```
+
+### C. Python environment and base dependencies
+
+Follow RoboTwin official install document first:
+- https://robotwin-platform.github.io/doc/usage/robotwin-install.html
+
+Then ensure your Python env can import RoboTwin env + sapien.
+
+If you maintain a dedicated env path, export it before running scripts:
+
+```bash
+export PYTHON=/path/to/your/python
+```
+
+> In this benchmark repo, shell scripts default to `/gemini/code/envs/robotwin/bin/python`.
+> On a new machine, you should override via `PYTHON=... bash scripts/xxx.sh`.
+
+### D. Recreate local symlink dependencies (critical)
+
+This repository contains symlinks that target local RoboTwin paths. After cloning,
+you must recreate or fix them.
+
+Run in benchmark root:
+
+```bash
+cd /data/code/robotwin-perturbed-bench
+rm -rf envs task_config assets description script
+ln -s ../robotwin/envs envs
+ln -s ../robotwin/task_config task_config
+ln -s ../robotwin/assets assets
+ln -s ../robotwin/description description
+ln -s ../robotwin/script script
+```
+
+Verify:
+
+```bash
+ls -l envs task_config assets description script
+```
+
+### E. Models and checkpoints
+
+This benchmark does **evaluation only** (no retraining), but each policy still needs
+its runtime checkpoints/models.
+
+1. **Motus**
+   - Update paths in `configs/motus.yml`:
+     - `checkpoint_path`
+     - `wan_path`
+     - `vlm_path`
+2. **Pi0.5**
+   - Update `configs/pi05.yml` with your config/checkpoint identifiers.
+3. **LingbotVA**
+   - Update `configs/lingbot_va.yml` (`port`, root path)
+   - Start LingbotVA server before running client-side eval.
+
+> If you need exact model download links, use each policy repo/release page corresponding
+> to your internal setup. This benchmark intentionally reads paths from `configs/*.yml`.
+
+### F. Dataset download (when needed)
+
+- For **benchmark evaluation in this repo**, pre-collected RoboTwin dataset is usually
+  **not required** unless your policy runtime explicitly depends on local dataset artifacts.
+- For training/retraining or policy-specific preprocessing, use RoboTwin dataset:
+  - https://huggingface.co/datasets/TianxingChen/RoboTwin2.0/tree/main/dataset
+
+Recommended practice:
+- keep datasets under `/data/datasets/robotwin` (or your storage mount)
+- do not place huge datasets inside this benchmark repo
+
+### G. Machine validation checklist (run before long experiments)
+
+```bash
+cd /data/code/robotwin-perturbed-bench
+
+# 1) renderer/sapien health
+${PYTHON:-python} -c "from script.test_render import Sapien_TEST; Sapien_TEST()"
+
+# 2) ffmpeg availability
+ffmpeg -version
+
+# 3) benchmark spec generation
+PYTHON=${PYTHON:-python} bash scripts/generate_spec.sh
+
+# 4) quick smoke eval (small subset)
+PYTHON=${PYTHON:-python} bash scripts/run_motus.sh 0 "scale_lm_always_on" "adjust_bottle"
+```
+
+### H. Cross-machine path adaptation summary
+
+On new machines, update these files first:
+
+- `scripts/*.sh`: optionally pass `PYTHON=/path/to/python`
+- `configs/motus.yml`: model + repo paths
+- `configs/pi05.yml`: model identifiers
+- `configs/lingbot_va.yml`: repo path + server port
+
+Do this once, then the same run commands are portable.
+
 ## Quick Start
 
 ### 0. Prerequisites (must pass before running)
