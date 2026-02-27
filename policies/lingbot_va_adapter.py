@@ -1,7 +1,7 @@
 """
 LingbotVA policy adapter for the perturbed benchmark.
 
-Wraps the WebsocketClientPolicy from lingbot-va evaluation.
+Wraps the WebsocketClientPolicy (self-contained in policies/lingbot_va/).
 Action space: 16D end-effector (ee).
 
 The LingbotVA server must be launched separately before running the benchmark.
@@ -16,6 +16,7 @@ import numpy as np
 from typing import Any, Dict, List, Optional
 
 from policies.base_adapter import PolicyAdapter
+from policies.lingbot_va.websocket_client_policy import WebsocketClientPolicy
 
 
 class LingbotVAAdapter(PolicyAdapter):
@@ -23,6 +24,7 @@ class LingbotVAAdapter(PolicyAdapter):
 
     def __init__(self):
         self.model = None  # WebsocketClientPolicy
+        self._host = "127.0.0.1"
         self._port = 8000
         self._video_guidance_scale = 5.0
         self._action_guidance_scale = 5.0
@@ -33,49 +35,43 @@ class LingbotVAAdapter(PolicyAdapter):
         self._inint_eef_pose = None
 
         # Lazy-loaded modules
-        self._client_module = None
         self._R = None  # scipy Rotation
 
     def load(self, config: Dict[str, Any]) -> None:
         """Load LingbotVA client.
 
         Expected config keys:
-            lingbot_va_root: path to lingbot-va repo
-            robotwin_root: path to robotwin repo
+            robotwin_root: path to robotwin repo (for env imports)
             port: websocket port (default 8000)
             video_guidance_scale: (default 5.0)
             action_guidance_scale: (default 5.0)
             save_visualization: (default False)
         """
-        lingbot_va_root = config["lingbot_va_root"]
-        robotwin_root = config["robotwin_root"]
-
-        if robotwin_root not in sys.path:
+        robotwin_root = config.get("robotwin_root", "")
+        if robotwin_root and robotwin_root not in sys.path:
             sys.path.insert(0, robotwin_root)
-
-        eval_dir = os.path.join(lingbot_va_root, "evaluation", "robotwin")
-        if eval_dir not in sys.path:
-            sys.path.insert(0, eval_dir)
-
-        # Import the client module
-        import importlib.util
-        spec = importlib.util.spec_from_file_location(
-            "lingbot_client",
-            os.path.join(eval_dir, "eval_polict_client_openpi.py")
-        )
-        self._client_module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(self._client_module)
 
         from scipy.spatial.transform import Rotation as R
         self._R = R
 
         self._port = config.get("port", 8000)
+        self._host = config.get("host", "127.0.0.1")
         self._video_guidance_scale = config.get("video_guidance_scale", 5.0)
         self._action_guidance_scale = config.get("action_guidance_scale", 5.0)
         self._save_visualization = config.get("save_visualization", False)
 
-        # Create websocket client
-        self.model = self._client_module.WebsocketClientPolicy(port=self._port)
+        # Bypass proxy for local websocket server.
+        local_hosts = {"127.0.0.1", "localhost", "0.0.0.0", self._host}
+        existing_no_proxy = os.environ.get("NO_PROXY") or os.environ.get("no_proxy") or ""
+        merged_no_proxy = [h.strip() for h in existing_no_proxy.split(",") if h.strip()]
+        for host in local_hosts:
+            if host not in merged_no_proxy:
+                merged_no_proxy.append(host)
+        os.environ["NO_PROXY"] = ",".join(merged_no_proxy)
+        os.environ["no_proxy"] = os.environ["NO_PROXY"]
+
+        # Create websocket client (self-contained, no external repo needed)
+        self.model = WebsocketClientPolicy(host=self._host, port=self._port)
 
     def reset(self, task_env, instruction: str) -> None:
         """Reset for a new episode: send reset command to server."""
@@ -207,4 +203,4 @@ class LingbotVAAdapter(PolicyAdapter):
 
     @property
     def name(self) -> str:
-        return "LingbotVA"
+        return "lingbot"

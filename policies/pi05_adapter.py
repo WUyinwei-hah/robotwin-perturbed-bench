@@ -1,7 +1,7 @@
 """
 Pi0.5 policy adapter for the perturbed benchmark.
 
-Wraps the existing pi05/deploy_policy.py interface.
+Wraps the self-contained pi05 deploy_policy (policies/pi05_policy/).
 Action space: 14D qpos.
 """
 
@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 from typing import Any, Dict
 
 from policies.base_adapter import PolicyAdapter
@@ -26,18 +27,20 @@ class Pi05Adapter(PolicyAdapter):
         """Load Pi0.5 model.
 
         Expected config keys:
-            robotwin_root: path to robotwin repo
-            policy_dir: path to policy/pi05 directory
+            robotwin_root: path to robotwin repo (for env imports)
             train_config_name: training config name
             model_name: model name
             checkpoint_id: checkpoint id (default 30000)
             pi0_step: action horizon (default 50)
         """
-        policy_dir = config["policy_dir"]
-        robotwin_root = config["robotwin_root"]
-
-        if robotwin_root not in sys.path:
+        robotwin_root = config.get("robotwin_root", "")
+        if robotwin_root and robotwin_root not in sys.path:
             sys.path.insert(0, robotwin_root)
+
+        # Use self-contained Pi0.5 policy code
+        _bench_root = str(Path(__file__).resolve().parent.parent)
+        policy_dir = os.path.join(_bench_root, "policies", "pi05_policy")
+
         if policy_dir not in sys.path:
             sys.path.insert(0, policy_dir)
 

@@ -1,6 +1,6 @@
 # Pi0.5 policy configuration for perturbed benchmark
+# NOTE: policy_dir is no longer needed — Pi0.5 code is self-contained in policies/pi05_policy/
 robotwin_root: /gemini/code/robotwin
-policy_dir: /gemini/code/robotwin/policy/pi05
 
 # Model config
 train_config_name: pi0_aloha_pen_uncap

@@ -1,7 +1,7 @@
 """
 Motus policy adapter for the perturbed benchmark.
 
-Wraps the existing Motus V1 deploy_policy.py interface.
+Wraps the self-contained Motus deploy_policy (policies/motus_policy/).
 Action space: 14D qpos.
 """
 
@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 from typing import Any, Dict
 
 from policies.base_adapter import PolicyAdapter
@@ -26,23 +27,24 @@ class MotusAdapter(PolicyAdapter):
         """Load Motus model.
 
         Expected config keys:
-            robotwin_root: path to robotwin repo
-            policy_dir: path to policy/Motus directory
+            robotwin_root: path to robotwin repo (for env imports)
             checkpoint_path: path to checkpoint
             wan_path: path to WAN model
             vlm_path: path to VLM model
             device: cuda device string
         """
-        policy_dir = config["policy_dir"]
-        robotwin_root = config["robotwin_root"]
-
-        # Add paths for imports
-        if robotwin_root not in sys.path:
+        robotwin_root = config.get("robotwin_root", "")
+        if robotwin_root and robotwin_root not in sys.path:
             sys.path.insert(0, robotwin_root)
+
+        # Use self-contained Motus policy code
+        _bench_root = str(Path(__file__).resolve().parent.parent)
+        policy_dir = os.path.join(_bench_root, "policies", "motus_policy")
+
         if policy_dir not in sys.path:
             sys.path.insert(0, policy_dir)
 
-        # Import Motus deploy_policy
+        # Import Motus deploy_policy from self-contained copy
         import importlib.util
         spec = importlib.util.spec_from_file_location(
             "motus_deploy", os.path.join(policy_dir, "deploy_policy.py")
@@ -61,7 +63,7 @@ class MotusAdapter(PolicyAdapter):
         }
         # Merge any extra args
         for k, v in config.items():
-            if k not in usr_args and k not in ("robotwin_root", "policy_dir"):
+            if k not in usr_args and k not in ("robotwin_root",):
                 usr_args[k] = v
 
         self.model = module.get_model(usr_args)

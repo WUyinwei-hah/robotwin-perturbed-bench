@@ -11,12 +11,16 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import copy
+import importlib
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
 import numpy as np
+import yaml
 
 from benchmark.perturbation_engine import (
     BENCHMARK_PERTURB_TYPES,
@@ -86,6 +90,144 @@ STEP_LIMITS = {
 }
 
 
+# Ensure benchmark root is importable when run via -m
+_BENCH_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _BENCH_ROOT not in sys.path:
+    sys.path.insert(0, _BENCH_ROOT)
+
+
+def _class_decorator(task_name: str):
+    """Import and instantiate a task environment."""
+    envs_module = importlib.import_module(f"envs.{task_name}")
+    env_class = getattr(envs_module, task_name)
+    return env_class()
+
+
+def _load_task_config(task_config_name: str) -> Dict[str, Any]:
+    """Load task configuration YAML."""
+    config_path = os.path.join(_BENCH_ROOT, "task_config", f"{task_config_name}.yml")
+    with open(config_path, "r", encoding="utf-8") as f:
+        return yaml.load(f.read(), Loader=yaml.FullLoader)
+
+
+def _setup_env_args(args: Dict[str, Any]) -> Dict[str, Any]:
+    """Setup embodiment and camera configs for the environment."""
+    from envs import CONFIGS_PATH
+
+    embodiment_type = args.get("embodiment")
+    embodiment_config_path = os.path.join(CONFIGS_PATH, "_embodiment_config.yml")
+
+    with open(embodiment_config_path, "r", encoding="utf-8") as f:
+        embodiment_types = yaml.load(f.read(), Loader=yaml.FullLoader)
+
+    with open(CONFIGS_PATH + "_camera_config.yml", "r", encoding="utf-8") as f:
+        camera_config = yaml.load(f.read(), Loader=yaml.FullLoader)
+
+    def get_embodiment_file(etype):
+        robot_file = embodiment_types[etype]["file_path"]
+        if robot_file is None:
+            raise ValueError("No embodiment files")
+        return robot_file
+
+    def get_embodiment_config(robot_file):
+        robot_config_file = os.path.join(robot_file, "config.yml")
+        with open(robot_config_file, "r", encoding="utf-8") as f:
+            return yaml.load(f.read(), Loader=yaml.FullLoader)
+
+    head_camera_type = args["camera"]["head_camera_type"]
+    args["head_camera_h"] = camera_config[head_camera_type]["h"]
+    args["head_camera_w"] = camera_config[head_camera_type]["w"]
+
+    if len(embodiment_type) == 1:
+        args["left_robot_file"] = get_embodiment_file(embodiment_type[0])
+        args["right_robot_file"] = get_embodiment_file(embodiment_type[0])
+        args["dual_arm_embodied"] = True
+    elif len(embodiment_type) == 3:
+        args["left_robot_file"] = get_embodiment_file(embodiment_type[0])
+        args["right_robot_file"] = get_embodiment_file(embodiment_type[1])
+        args["embodiment_dis"] = embodiment_type[2]
+        args["dual_arm_embodied"] = False
+    else:
+        raise ValueError("embodiment items should be 1 or 3")
+
+    args["left_embodiment_config"] = get_embodiment_config(args["left_robot_file"])
+    args["right_embodiment_config"] = get_embodiment_config(args["right_robot_file"])
+    return args
+
+
+def _is_seed_stable_and_solvable(task_name: str, env_args: Dict[str, Any], seed: int) -> bool:
+    """Return True iff seed is stable and expert can solve it."""
+    from envs._base_task import UnStableError
+
+    task_env = _class_decorator(task_name)
+    try:
+        task_env.setup_demo(now_ep_num=0, seed=seed, is_test=True, **env_args)
+        task_env.play_once()
+        return bool(task_env.plan_success and task_env.check_success())
+    except UnStableError:
+        return False
+    except Exception:
+        return False
+    finally:
+        try:
+            task_env.close_env(clear_cache=True)
+        except TypeError:
+            try:
+                task_env.close_env()
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+
+def _generate_stable_seeds_by_task(
+    tasks: List[str],
+    repeats_per_setting: int,
+    master_seed: int,
+    task_config_name: str,
+    max_seed_trials_per_task: int,
+) -> Dict[str, List[int]]:
+    """Generate stable+solvable env seeds once per task, reused across all settings."""
+    print("Prechecking stable seeds (expert-solvable) ...")
+    base_args = _setup_env_args(_load_task_config(task_config_name))
+    base_args["eval_mode"] = True
+    base_args["render_freq"] = 0
+    base_args["task_config"] = task_config_name
+    base_args["policy_name"] = "seed_check"
+    base_args["ckpt_setting"] = "seed_check"
+
+    seed_rng = np.random.default_rng(master_seed + 2027)
+    stable_seeds_by_task: Dict[str, List[int]] = {}
+
+    for task_name in tasks:
+        task_args = copy.deepcopy(base_args)
+        task_args["task_name"] = task_name
+
+        accepted: List[int] = []
+        tried = 0
+        seen = set()
+        while len(accepted) < repeats_per_setting and tried < max_seed_trials_per_task:
+            candidate = int(seed_rng.integers(10000, 100000))
+            tried += 1
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+
+            if _is_seed_stable_and_solvable(task_name, task_args, candidate):
+                accepted.append(candidate)
+
+        if len(accepted) < repeats_per_setting:
+            raise RuntimeError(
+                f"Failed to find {repeats_per_setting} stable seeds for task '{task_name}' "
+                f"within {max_seed_trials_per_task} trials."
+            )
+
+        stable_seeds_by_task[task_name] = accepted
+        print(f"  {task_name}: {len(accepted)}/{repeats_per_setting} stable seeds found (trials={tried})")
+
+    return stable_seeds_by_task
+
+
 def compute_t_on_raw(task_name: str) -> int:
     """Compute t_on_raw for onset_then_always timing.
 
@@ -112,6 +254,9 @@ def generate_benchmark_spec(
     tasks: List[str],
     repeats_per_setting: int = 5,
     master_seed: int = 42,
+    ensure_stable_seeds: bool = True,
+    task_config_name: str = "demo_clean",
+    max_seed_trials_per_task: int = 400,
 ) -> Dict[str, Any]:
     """Generate the full benchmark specification.
 
@@ -127,6 +272,16 @@ def generate_benchmark_spec(
     settings = []
     perturbation_configs = {}
     env_seeds = {}
+
+    stable_seeds_by_task: Dict[str, List[int]] = {}
+    if ensure_stable_seeds:
+        stable_seeds_by_task = _generate_stable_seeds_by_task(
+            tasks=tasks,
+            repeats_per_setting=repeats_per_setting,
+            master_seed=master_seed,
+            task_config_name=task_config_name,
+            max_seed_trials_per_task=max_seed_trials_per_task,
+        )
 
     for perturb_type in BENCHMARK_PERTURB_TYPES:
         for severity in Severity:
@@ -172,7 +327,10 @@ def generate_benchmark_spec(
                         task_configs.append(cfg.to_dict())
 
                         # Env seed for this episode
-                        env_seed = int(task_rng.integers(10000, 100000))
+                        if ensure_stable_seeds:
+                            env_seed = stable_seeds_by_task[task_name][repeat_idx]
+                        else:
+                            env_seed = int(task_rng.integers(10000, 100000))
                         task_seeds.append(env_seed)
 
                     perturbation_configs[setting_id][task_name] = task_configs
@@ -200,6 +358,13 @@ def main():
     parser.add_argument("--tasks-file", type=str, default="tasks_all.txt")
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--master-seed", type=int, default=42)
+    parser.add_argument("--task-config", type=str, default="demo_clean")
+    parser.add_argument("--max-seed-trials-per-task", type=int, default=400)
+    parser.add_argument(
+        "--no-stable-seed-check",
+        action="store_true",
+        help="Disable stability/expert precheck for env seeds (not recommended).",
+    )
     args = parser.parse_args()
 
     # Load tasks
@@ -216,6 +381,9 @@ def main():
         tasks=tasks,
         repeats_per_setting=args.repeats,
         master_seed=args.master_seed,
+        ensure_stable_seeds=not args.no_stable_seed_check,
+        task_config_name=args.task_config,
+        max_seed_trials_per_task=args.max_seed_trials_per_task,
     )
 
     # Save

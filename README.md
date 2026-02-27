@@ -25,11 +25,14 @@ robotwin-perturbed-bench/
 │   ├── eval_runner.py           # Core evaluation loop
 │   ├── aggregate_results.py     # Result aggregation & CSV export
 │   └── benchmark_spec.json      # Generated spec (after running generate_spec.sh)
-├── policies/
+├── policies/                    # *** SELF-CONTAINED policy code ***
 │   ├── base_adapter.py          # Abstract policy interface
 │   ├── motus_adapter.py         # Motus adapter
 │   ├── pi05_adapter.py          # Pi0.5 adapter
-│   └── lingbot_va_adapter.py    # LingbotVA adapter (websocket client)
+│   ├── lingbot_va_adapter.py    # LingbotVA adapter (websocket client)
+│   ├── motus_policy/            # Full Motus inference code (models/, utils/, bak/)
+│   ├── pi05_policy/             # Full Pi0.5 inference code (src/, packages/)
+│   └── lingbot_va/              # LingbotVA websocket client + server launch script
 ├── configs/
 │   ├── motus.yml                # Motus model paths
 │   ├── pi05.yml                 # Pi0.5 model paths
@@ -50,6 +53,18 @@ robotwin-perturbed-bench/
 └── script -> ../robotwin/script
 ```
 
+## Self-Contained Design
+
+All policy inference code is bundled inside this repository:
+
+- **Motus** → `policies/motus_policy/` (models, WAN backbone, Qwen VLM, utils)
+- **Pi0.5** → `policies/pi05_policy/` (full Pi0.5 inference stack)
+- **LingbotVA** → `policies/lingbot_va/` (websocket client + msgpack serialization)
+
+You do **not** need to clone the original `Motus` or `lingbot-va` repositories to run the benchmark. The only external dependency is the **RoboTwin simulation environment** (`robotwin` repo), which provides task definitions, SAPIEN scenes, and robot assets.
+
+> **Exception**: LingbotVA uses a client-server architecture. The *client* is self-contained, but the *server* (model inference) still requires the `lingbot-va` repo to be installed separately. A launch script template is provided at `policies/lingbot_va/server/launch_server.sh`.
+
 ## Run on Another Machine (Full Setup Guide)
 
 This section is the recommended migration path after cloning from GitHub.
@@ -60,10 +75,10 @@ Use the same parent folder for all related repos:
 
 ```text
 <WORK_ROOT>/
-  robotwin/
-  robotwin-perturbed-bench/
-  lingbot-va/                  # only needed for LingbotVA policy
-  models/                      # optional but recommended central model folder
+  robotwin/                    # RoboTwin simulator (required for all policies)
+  robotwin-perturbed-bench/    # This repo (self-contained policy code)
+  lingbot-va/                  # Only needed for LingbotVA SERVER
+  models/                      # Model weights (downloaded separately)
 ```
 
 Example below uses `<WORK_ROOT>=/data/code`.
@@ -123,16 +138,21 @@ ls -l envs task_config assets description script
 This benchmark does **evaluation only** (no retraining), but each policy still needs
 its runtime checkpoints/models.
 
-1. **Motus**
-   - Update paths in `configs/motus.yml`:
-     - `checkpoint_path`
-     - `wan_path`
-     - `vlm_path`
-2. **Pi0.5**
-   - Update `configs/pi05.yml` with your config/checkpoint identifiers.
-3. **LingbotVA**
-   - Update `configs/lingbot_va.yml` (`port`, root path)
-   - Start LingbotVA server before running client-side eval.
+1. **Motus** — update `configs/motus.yml`:
+   - `robotwin_root`: path to your RoboTwin repo
+   - `checkpoint_path`: Motus model checkpoint
+   - `wan_path`: Wan2.2-TI2V-5B weights
+   - `vlm_path`: Qwen3-VL-2B-Instruct weights
+   - *(No `policy_dir` needed — code is self-contained in `policies/motus_policy/`)*
+2. **Pi0.5** — update `configs/pi05.yml`:
+   - `robotwin_root`: path to your RoboTwin repo
+   - `train_config_name`, `model_name`, `checkpoint_id`
+   - *(No `policy_dir` needed — code is self-contained in `policies/pi05_policy/`)*
+3. **LingbotVA** — update `configs/lingbot_va.yml`:
+   - `robotwin_root`: path to your RoboTwin repo
+   - `host`, `port`: websocket server address
+   - Start LingbotVA server before running client-side eval
+   - *(No `lingbot_va_root` needed — client is self-contained in `policies/lingbot_va/`)*
 
 > If you need exact model download links, use each policy repo/release page corresponding
 > to your internal setup. This benchmark intentionally reads paths from `configs/*.yml`.
@@ -171,10 +191,11 @@ PYTHON=${PYTHON:-python} bash scripts/run_motus.sh 0 "scale_lm_always_on" "adjus
 On new machines, update these files first:
 
 - `scripts/*.sh`: optionally pass `PYTHON=/path/to/python`
-- `configs/motus.yml`: model + repo paths
-- `configs/pi05.yml`: model identifiers
-- `configs/lingbot_va.yml`: repo path + server port
+- `configs/motus.yml`: `robotwin_root` + model checkpoint paths
+- `configs/pi05.yml`: `robotwin_root` + model identifiers
+- `configs/lingbot_va.yml`: `robotwin_root` + server host/port
 
+No `policy_dir` or `lingbot_va_root` paths needed — all policy code is self-contained.
 Do this once, then the same run commands are portable.
 
 ## Quick Start
@@ -209,18 +230,11 @@ This creates `benchmark/benchmark_spec.json` with deterministic perturbation con
 
 Edit these files to your real paths:
 
-- `configs/motus.yml`
-  - `checkpoint_path`
-  - `wan_path`
-  - `vlm_path`
-- `configs/pi05.yml`
-  - `train_config_name`
-  - `model_name`
-  - `checkpoint_id`
-- `configs/lingbot_va.yml`
-  - `port`
+- `configs/motus.yml` — `robotwin_root`, `checkpoint_path`, `wan_path`, `vlm_path`
+- `configs/pi05.yml` — `robotwin_root`, `train_config_name`, `model_name`, `checkpoint_id`
+- `configs/lingbot_va.yml` — `robotwin_root`, `host`, `port`
 
-If paths are wrong, loading will fail before first episode.
+No external `policy_dir` or `lingbot_va_root` needed. If model paths are wrong, loading will fail before the first episode.
 
 ### 3. Run Evaluation
 

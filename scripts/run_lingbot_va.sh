@@ -20,6 +20,9 @@ TASKS="${3:-}"
 
 PYTHON="${PYTHON:-/gemini/code/envs/robotwin/bin/python}"
 
+# Bypass proxy for local websocket server (same pattern as lingbot-va experiments)
+unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY
+
 EXTRA_ARGS=""
 if [ -n "$SETTINGS" ]; then
     EXTRA_ARGS="$EXTRA_ARGS --settings $SETTINGS"
