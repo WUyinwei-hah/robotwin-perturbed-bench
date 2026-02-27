@@ -158,18 +158,68 @@ its runtime checkpoints/models.
 > If you need exact model download links, use each policy repo/release page corresponding
 > to your internal setup. This benchmark intentionally reads paths from `configs/*.yml`.
 
-### F. Dataset download (when needed)
+### F. Dataset (usually NOT needed)
 
-- For **benchmark evaluation in this repo**, pre-collected RoboTwin dataset is usually
-  **not required** unless your policy runtime explicitly depends on local dataset artifacts.
-- For training/retraining or policy-specific preprocessing, use RoboTwin dataset:
-  - https://huggingface.co/datasets/TianxingChen/RoboTwin2.0/tree/main/dataset
+**For benchmark evaluation, no dataset download is required.**
+The `benchmark_spec.json` is pre-generated and committed to this repo with all seeds and perturbation parameters.
 
-Recommended practice:
-- keep datasets under `/data/datasets/robotwin` (or your storage mount)
-- do not place huge datasets inside this benchmark repo
+Dataset is only needed if you want to **regenerate** the spec from scratch.
+In that case, `spec_generator.py` reads seed candidates from a clean expert-demo dataset with this structure:
 
-### G. Machine validation checklist (run before long experiments)
+```text
+<dataset_root>/
+  <task_name>/
+    qpos/
+      0.pt
+      1.pt
+      ...
+```
+
+The official RoboTwin dataset on HuggingFace has a **different structure** — per-embodiment zip files:
+
+```text
+https://huggingface.co/datasets/TianxingChen/RoboTwin2.0/tree/main/dataset
+  <task_name>/
+    aloha-agilex_clean_50.zip   # ← zipped, organized by embodiment
+    aloha-agilex_randomized_500.zip
+    ur5_clean_50.zip
+    ...
+```
+
+To use HuggingFace data for spec regeneration, you need to:
+1. Download the `aloha-agilex_clean_50.zip` for each task
+2. Unzip into `<dataset_root>/<task_name>/` so that `qpos/*.pt` files are directly accessible
+3. Pass `--dataset-root <dataset_root>` to `spec_generator.py`
+
+> **In practice, you should just use the pre-generated `benchmark_spec.json`** — regeneration requires SAPIEN + CuroboPlanner for seed verification.
+
+### G. CuroboPlanner / IK solver compatibility (important)
+
+The eval runner includes a **Phase 1 expert check** that verifies each seed is solvable
+before running the policy. This requires CuroboPlanner (GPU-based IK solver).
+
+If CuroboPlanner crashes on your machine (e.g., `CUDA driver version is insufficient
+for CUDA runtime version`), you have two options:
+
+**Option 1: Fix CuroboPlanner** (recommended)
+
+```bash
+# Reinstall curobo compiled against your PyTorch's CUDA version
+pip uninstall curobo
+export CUDA_HOME=/usr/local/cuda-12.1  # match your PyTorch CUDA
+pip install git+https://github.com/NVlabs/curobo.git --no-build-isolation
+```
+
+**Option 2: Skip expert check** (seeds are already pre-verified in the spec)
+
+```bash
+SKIP_EXPERT_CHECK=1 bash scripts/run_motus.sh 0
+```
+
+This is safe because all seeds in `benchmark_spec.json` were verified during spec
+generation. The expert check is a redundant safety net.
+
+### H. Machine validation checklist (run before long experiments)
 
 ```bash
 cd /data/code/robotwin-perturbed-bench
@@ -180,14 +230,14 @@ ${PYTHON:-python} -c "from script.test_render import Sapien_TEST; Sapien_TEST()"
 # 2) ffmpeg availability
 ffmpeg -version
 
-# 3) benchmark spec generation
-PYTHON=${PYTHON:-python} bash scripts/generate_spec.sh
-
-# 4) quick smoke eval (small subset)
+# 3) quick smoke eval (small subset)
 PYTHON=${PYTHON:-python} bash scripts/run_motus.sh 0 "scale_lm_always_on" "adjust_bottle"
+
+# If expert check fails (IK errors), try with skip:
+SKIP_EXPERT_CHECK=1 PYTHON=${PYTHON:-python} bash scripts/run_motus.sh 0 "scale_lm_always_on" "adjust_bottle"
 ```
 
-### H. Cross-machine path adaptation summary
+### I. Cross-machine path adaptation summary
 
 On new machines, update these files first:
 
@@ -219,13 +269,16 @@ ffmpeg -version
 
 5. (For LingbotVA) policy server is running before evaluation.
 
-### 1. Generate Benchmark Spec
+### 1. Benchmark Spec (pre-generated)
+
+`benchmark/benchmark_spec.json` is already committed with deterministic perturbation configs
+for all 50,000 episodes. **You do not need to regenerate it.**
+
+To regenerate from scratch (requires SAPIEN + CuroboPlanner + clean dataset):
 
 ```bash
 bash scripts/generate_spec.sh
 ```
-
-This creates `benchmark/benchmark_spec.json` with deterministic perturbation configs for all 50,000 episodes.
 
 ### 2. Update Policy Configs (critical)
 
@@ -252,6 +305,9 @@ bash scripts/run_pi05.sh 1
 
 # LingbotVA (server must be running separately)
 bash scripts/run_lingbot_va.sh 2
+
+# Skip expert check (when CuroboPlanner is unavailable)
+SKIP_EXPERT_CHECK=1 bash scripts/run_motus.sh 0
 ```
 
 #### Practical run strategy (recommended)
@@ -342,14 +398,30 @@ Check `configs/*.yml` model paths.
 Validate display/driver environment and run:
 
 ```bash
-/gemini/code/envs/robotwin/bin/python -c "from script.test_render import Sapien_TEST; Sapien_TEST()"
+${PYTHON:-python} -c "from script.test_render import Sapien_TEST; Sapien_TEST()"
 ```
 
-### 3) LingbotVA blocks or times out
+### 3) `expert_failed` / `IK Failed! Cannot find valid solution`
+The expert demo planner (CuroboPlanner) cannot solve the task on this machine.
+This is typically caused by CUDA version incompatibility with `curobo`.
+
+**Quick fix**: skip expert check (seeds are pre-verified):
+```bash
+SKIP_EXPERT_CHECK=1 bash scripts/run_motus.sh 0
+```
+
+**Permanent fix**: reinstall curobo matching your PyTorch CUDA version:
+```bash
+pip uninstall curobo
+export CUDA_HOME=/usr/local/cuda-12.1  # match: python -c "import torch; print(torch.version.cuda)"
+pip install git+https://github.com/NVlabs/curobo.git --no-build-isolation
+```
+
+### 4) LingbotVA blocks or times out
 - confirm server is started
 - confirm `port` in `configs/lingbot_va.yml` matches server
 
-### 4) Interrupted runs
+### 5) Interrupted runs
 Re-run the same command. Existing episodes are skipped (resume behavior).
 
 ## Upload to GitHub

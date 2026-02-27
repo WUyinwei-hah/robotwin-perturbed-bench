@@ -6,6 +6,9 @@
 #
 # Usage:
 #   bash scripts/run_lingbot_va.sh [GPU_ID] [SETTINGS] [TASKS]
+#
+# Environment variables:
+#   SKIP_EXPERT_CHECK=1  Skip expert demo verification (use when CuroboPlanner unavailable)
 
 set -e
 
@@ -29,6 +32,9 @@ if [ -n "$SETTINGS" ]; then
 fi
 if [ -n "$TASKS" ]; then
     EXTRA_ARGS="$EXTRA_ARGS --tasks $TASKS"
+fi
+if [ "${SKIP_EXPERT_CHECK:-0}" = "1" ]; then
+    EXTRA_ARGS="$EXTRA_ARGS --skip-expert-check"
 fi
 
 echo "Running LingbotVA benchmark on GPU $GPU_ID"

@@ -140,8 +140,13 @@ def run_single_episode(
     perturb_cfg: PerturbationConfig,
     video_size: Optional[str] = None,
     repeat_idx: int = 0,
+    skip_expert_check: bool = False,
 ) -> Dict[str, Any]:
     """Run a single episode with perturbation.
+
+    If *skip_expert_check* is True, Phase 1 (expert demo verification) is
+    skipped entirely.  Use this when seeds are pre-verified or when the
+    CuroboPlanner / IK solver is unavailable on the current machine.
 
     Returns:
         dict with keys: success, steps, seed, perturbation_log, error
@@ -157,43 +162,51 @@ def run_single_episode(
         "perturbation_log": perturb_cfg.to_dict(),
     }
 
-    # Phase 1: Expert check — verify seed is solvable
-    render_freq = env_args["render_freq"]
-    env_args["render_freq"] = 0
+    episode_info = None
 
-    try:
-        task_env.setup_demo(now_ep_num=0, seed=seed, is_test=True, **env_args)
-        episode_info = task_env.play_once()
-        task_env.close_env(clear_cache=True)
-    except UnStableError:
+    if not skip_expert_check:
+        # Phase 1: Expert check — verify seed is solvable
+        render_freq = env_args["render_freq"]
+        env_args["render_freq"] = 0
+
         try:
+            task_env.setup_demo(now_ep_num=0, seed=seed, is_test=True, **env_args)
+            episode_info = task_env.play_once()
             task_env.close_env(clear_cache=True)
-        except Exception:
-            pass
-        result["error"] = "unstable_seed"
-        env_args["render_freq"] = render_freq
-        return result
-    except Exception as e:
-        try:
-            task_env.close_env(clear_cache=True)
-        except Exception:
-            pass
-        result["error"] = f"expert_check_error: {e}"
-        env_args["render_freq"] = render_freq
-        return result
+        except UnStableError:
+            try:
+                task_env.close_env(clear_cache=True)
+            except Exception:
+                pass
+            result["error"] = "unstable_seed"
+            env_args["render_freq"] = render_freq
+            return result
+        except Exception as e:
+            try:
+                task_env.close_env(clear_cache=True)
+            except Exception:
+                pass
+            result["error"] = f"expert_check_error: {e}"
+            env_args["render_freq"] = render_freq
+            return result
 
-    if not (task_env.plan_success and task_env.check_success()):
-        result["error"] = "expert_failed"
-        env_args["render_freq"] = render_freq
-        return result
+        if not (task_env.plan_success and task_env.check_success()):
+            result["error"] = "expert_failed"
+            env_args["render_freq"] = render_freq
+            return result
 
-    env_args["render_freq"] = render_freq
+        env_args["render_freq"] = render_freq
 
     # Phase 2: Policy evaluation with perturbation
     try:
         task_env.setup_demo(now_ep_num=0, seed=seed, is_test=True, **env_args)
-        episode_info_list = [episode_info["info"]]
-        instruction = generate_instruction(task_name, episode_info_list, 1)
+
+        if episode_info is not None:
+            episode_info_list = [episode_info["info"]]
+            instruction = generate_instruction(task_name, episode_info_list, 1)
+        else:
+            # No expert run — generate instruction from task name only
+            instruction = generate_instruction(task_name, [], 0)
         task_env.set_instruction(instruction=instruction)
 
         # Setup video recording
@@ -257,6 +270,7 @@ def run_benchmark(
     tasks_filter: Optional[List[str]] = None,
     output_dir: str = "results",
     task_config_name: str = "demo_clean",
+    skip_expert_check: bool = False,
 ) -> None:
     """Run the full benchmark (or a subset).
 
@@ -267,6 +281,7 @@ def run_benchmark(
         tasks_filter: list of task names to run (None = all)
         output_dir: root output directory
         task_config_name: task config to use
+        skip_expert_check: skip Phase 1 expert demo verification per episode
     """
     policy_name = policy_adapter.name
     settings = spec["settings"]
@@ -377,6 +392,7 @@ def run_benchmark(
                     perturb_cfg=perturb_cfg,
                     video_size=video_size,
                     repeat_idx=ri,
+                    skip_expert_check=skip_expert_check,
                 )
 
                 # Add metadata
@@ -460,6 +476,9 @@ def main():
                         help="Task config name")
     parser.add_argument("--gpu", type=int, default=0,
                         help="GPU ID")
+    parser.add_argument("--skip-expert-check", action="store_true",
+                        help="Skip Phase 1 expert demo verification. Use when "
+                             "seeds are pre-verified or CuroboPlanner is unavailable.")
     args = parser.parse_args()
 
     # Set GPU
@@ -501,6 +520,7 @@ def main():
         tasks_filter=tasks_filter,
         output_dir=args.output,
         task_config_name=args.task_config,
+        skip_expert_check=args.skip_expert_check,
     )
 
 

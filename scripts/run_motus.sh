@@ -8,6 +8,9 @@
 #   bash scripts/run_motus.sh 0                          # all settings, all tasks
 #   bash scripts/run_motus.sh 0 scale_lm_always_on       # single setting
 #   bash scripts/run_motus.sh 0 "" adjust_bottle,click_bell  # specific tasks
+#
+# Environment variables:
+#   SKIP_EXPERT_CHECK=1  Skip expert demo verification (use when CuroboPlanner unavailable)
 
 set -e
 
@@ -28,6 +31,9 @@ if [ -n "$SETTINGS" ]; then
 fi
 if [ -n "$TASKS" ]; then
     EXTRA_ARGS="$EXTRA_ARGS --tasks $TASKS"
+fi
+if [ "${SKIP_EXPERT_CHECK:-0}" = "1" ]; then
+    EXTRA_ARGS="$EXTRA_ARGS --skip-expert-check"
 fi
 
 echo "Running Motus benchmark on GPU $GPU_ID"
