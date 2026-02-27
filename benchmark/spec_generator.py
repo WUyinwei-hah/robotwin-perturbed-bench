@@ -234,22 +234,116 @@ def _generate_stable_seeds_by_task(
     return stable_seeds_by_task
 
 
+def _verify_seeds_subprocess(
+    task_name: str,
+    candidates: List[int],
+    needed: int,
+    task_config_name: str,
+    strict: bool = True,
+) -> List[int]:
+    """Verify seeds for ONE task in a subprocess (avoids SAPIEN GPU leaks).
+
+    If *strict* is True, requires both plan_success and check_success.
+    If *strict* is False, only requires no UnStableError (env stability).
+    Returns up to *needed* verified seeds from *candidates*.
+    """
+    import subprocess as _sp
+    import textwrap
+
+    script = textwrap.dedent(f"""\
+        import sys, copy, json
+        sys.path.insert(0, {repr(_BENCH_ROOT)})
+        from benchmark.spec_generator import (
+            _class_decorator, _load_task_config, _setup_env_args,
+        )
+        from envs._base_task import UnStableError
+        import copy
+
+        base_args = _setup_env_args(_load_task_config({repr(task_config_name)}))
+        base_args["eval_mode"] = True
+        base_args["render_freq"] = 0
+        base_args["task_config"] = {repr(task_config_name)}
+        base_args["policy_name"] = "seed_check"
+        base_args["ckpt_setting"] = "seed_check"
+
+        task_args = copy.deepcopy(base_args)
+        task_args["task_name"] = {repr(task_name)}
+
+        candidates = {candidates!r}
+        needed = {needed}
+        strict = {strict!r}
+        accepted = []
+        for seed in candidates:
+            task_env = _class_decorator({repr(task_name)})
+            ok = False
+            try:
+                task_env.setup_demo(now_ep_num=0, seed=seed, is_test=True, **task_args)
+                task_env.play_once()
+                if strict:
+                    ok = bool(task_env.plan_success and task_env.check_success())
+                else:
+                    ok = True  # env didn't crash → stable
+            except UnStableError:
+                ok = False
+            except Exception:
+                ok = False
+            finally:
+                try: task_env.close_env(clear_cache=True)
+                except:
+                    try: task_env.close_env()
+                    except: pass
+            if ok:
+                accepted.append(seed)
+                if len(accepted) >= needed:
+                    break
+
+        print("SEEDS_RESULT:" + json.dumps(accepted))
+    """)
+
+    result = _sp.run(
+        [sys.executable, "-u", "-c", script],
+        capture_output=True,
+        text=True,
+        cwd=_BENCH_ROOT,
+        timeout=7200,
+    )
+
+    for line in result.stdout.splitlines():
+        if line.startswith("SEEDS_RESULT:"):
+            return json.loads(line[len("SEEDS_RESULT:"):])
+
+    # Debug: show stderr tail on failure
+    err_tail = (result.stderr or "").strip().splitlines()[-5:]
+    print(f"  [subprocess stderr tail for {task_name}]:")
+    for el in err_tail:
+        print(f"    {el}")
+    return []
+
+
 def _load_stable_seeds_from_dataset(
     tasks: List[str],
-    repeats_per_setting: int,
     master_seed: int,
     dataset_root: str,
-) -> Dict[str, List[int]]:
-    """Load stable seeds from an existing clean expert-demo dataset.
+    task_config_name: str = "demo_clean",
+    verify: bool = True,
+) -> Dict[str, int]:
+    """Load ONE stable seed per task from an existing clean expert-demo dataset.
 
     Each episode file in ``<dataset_root>/<task>/qpos/<N>.pt`` indicates that
     seed *N* was successfully used to collect an expert demo, so it is
-    inherently stable and solvable. We deterministically select *repeats*
-    seeds per task using a seeded RNG (for reproducibility).
+    *likely* stable and solvable.
+
+    If *verify* is True (default), candidate seeds are validated via a
+    SAPIEN expert-demo run in a **subprocess** (one per task, so GPU
+    resources are released between tasks). Strict check first
+    (plan_success AND check_success), with relaxed fallback (no crash).
+
+    Returns ``{task_name: seed}``.
     """
     print(f"Loading stable seeds from dataset: {dataset_root}")
+    print(f"  SAPIEN verification: {'ON' if verify else 'OFF'}")
     seed_rng = np.random.default_rng(master_seed + 2027)
-    stable_seeds_by_task: Dict[str, List[int]] = {}
+    stable_seed_by_task: Dict[str, int] = {}
 
     for task_name in tasks:
         qpos_dir = os.path.join(dataset_root, task_name, "qpos")
@@ -264,19 +358,50 @@ def _load_stable_seeds_from_dataset(
             if f.endswith(".pt")
         )
 
-        if len(available) < repeats_per_setting:
+        if not available:
+            raise RuntimeError(f"Task '{task_name}' has no episodes in dataset.")
+
+        # Deterministic shuffle to pick candidates
+        shuffled = seed_rng.permutation(available).tolist()
+
+        if not verify:
+            stable_seed_by_task[task_name] = shuffled[0]
+            print(f"  {task_name}: seed={shuffled[0]} (unverified, from {len(available)})")
+            continue
+
+        # Pass 1: strict (plan_success AND check_success)
+        accepted = _verify_seeds_subprocess(
+            task_name=task_name,
+            candidates=shuffled,
+            needed=1,
+            task_config_name=task_config_name,
+            strict=True,
+        )
+
+        if accepted:
+            stable_seed_by_task[task_name] = accepted[0]
+            print(f"  {task_name}: seed={accepted[0]} (strict, from {len(available)})")
+            continue
+
+        # Pass 2: relaxed (no crash)
+        accepted = _verify_seeds_subprocess(
+            task_name=task_name,
+            candidates=shuffled,
+            needed=1,
+            task_config_name=task_config_name,
+            strict=False,
+        )
+
+        if accepted:
+            stable_seed_by_task[task_name] = accepted[0]
+            print(f"  {task_name}: seed={accepted[0]} (relaxed, from {len(available)})")
+        else:
             raise RuntimeError(
-                f"Task '{task_name}' only has {len(available)} episodes in dataset, "
-                f"but {repeats_per_setting} are required."
+                f"Task '{task_name}': no stable seed found from "
+                f"{len(available)} dataset candidates."
             )
 
-        # Deterministic shuffle + pick first N
-        shuffled = seed_rng.permutation(available).tolist()
-        selected = sorted(shuffled[:repeats_per_setting])
-        stable_seeds_by_task[task_name] = selected
-        print(f"  {task_name}: selected seeds {selected} (from {len(available)} available)")
-
-    return stable_seeds_by_task
+    return stable_seed_by_task
 
 
 def compute_t_on_raw(task_name: str) -> int:
@@ -309,6 +434,7 @@ def generate_benchmark_spec(
     task_config_name: str = "demo_clean",
     max_seed_trials_per_task: int = 400,
     dataset_root: str | None = None,
+    verify_seeds: bool = True,
 ) -> Dict[str, Any]:
     """Generate the full benchmark specification.
 
@@ -319,8 +445,9 @@ def generate_benchmark_spec(
       - perturbation_configs: nested dict [setting_id][task_name] -> list of configs
       - env_seeds: nested dict [setting_id][task_name] -> list of starting seeds
 
-    If *dataset_root* is provided, stable seeds are read from the clean dataset
-    (fast, no SAPIEN required). Otherwise falls back to SAPIEN-based precheck.
+    If *dataset_root* is provided, stable seeds are read from the clean dataset.
+    If *verify_seeds* is True (default), each seed is validated via SAPIEN in a
+    subprocess. Otherwise seeds are used as-is (fast but unverified).
     """
     master_rng = np.random.default_rng(master_seed)
 
@@ -328,23 +455,27 @@ def generate_benchmark_spec(
     perturbation_configs = {}
     env_seeds = {}
 
-    stable_seeds_by_task: Dict[str, List[int]] = {}
+    # Maps task_name -> single env seed
+    stable_seed_by_task: Dict[str, int] = {}
     if ensure_stable_seeds:
         if dataset_root is not None:
-            stable_seeds_by_task = _load_stable_seeds_from_dataset(
+            stable_seed_by_task = _load_stable_seeds_from_dataset(
                 tasks=tasks,
-                repeats_per_setting=repeats_per_setting,
                 master_seed=master_seed,
                 dataset_root=dataset_root,
+                task_config_name=task_config_name,
+                verify=verify_seeds,
             )
         else:
-            stable_seeds_by_task = _generate_stable_seeds_by_task(
+            # Legacy path: pick first seed from the old multi-seed method
+            multi = _generate_stable_seeds_by_task(
                 tasks=tasks,
-                repeats_per_setting=repeats_per_setting,
+                repeats_per_setting=1,
                 master_seed=master_seed,
                 task_config_name=task_config_name,
                 max_seed_trials_per_task=max_seed_trials_per_task,
             )
+            stable_seed_by_task = {t: seeds[0] for t, seeds in multi.items()}
 
     for perturb_type in BENCHMARK_PERTURB_TYPES:
         for severity in Severity:
@@ -389,9 +520,9 @@ def generate_benchmark_spec(
                         )
                         task_configs.append(cfg.to_dict())
 
-                        # Env seed for this episode
+                        # Env seed: same seed for all repeats of this task
                         if ensure_stable_seeds:
-                            env_seed = stable_seeds_by_task[task_name][repeat_idx]
+                            env_seed = stable_seed_by_task[task_name]
                         else:
                             env_seed = int(task_rng.integers(10000, 100000))
                         task_seeds.append(env_seed)
@@ -433,7 +564,12 @@ def main():
         type=str,
         default=None,
         help="Path to clean expert-demo dataset to read stable seeds from "
-             "(e.g. /path/to/robotwin_dataset/clean). Avoids SAPIEN precheck.",
+             "(e.g. /path/to/robotwin_dataset/clean).",
+    )
+    parser.add_argument(
+        "--no-verify",
+        action="store_true",
+        help="Skip SAPIEN verification of dataset seeds (fast but unverified).",
     )
     args = parser.parse_args()
 
@@ -455,6 +591,7 @@ def main():
         task_config_name=args.task_config,
         max_seed_trials_per_task=args.max_seed_trials_per_task,
         dataset_root=args.dataset_root,
+        verify_seeds=not args.no_verify,
     )
 
     # Save

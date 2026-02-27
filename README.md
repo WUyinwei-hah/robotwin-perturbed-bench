@@ -8,11 +8,12 @@ A reproducible benchmark for evaluating robotic manipulation policies under fixe
 - **5 perturbation types**: Scale, Coupling, Low-pass IIR, Low-pass FIR, Bias (Drop excluded)
 - **2 severity levels**: LM (low-medium), HIGH
 - **2 timing modes**: `always_on` (from step 0), `onset_then_always` (from fixed early onset)
-- **5 repeats** per (setting × task) combination
-- **20 settings** × 50 tasks × 5 repeats = **5,000 episodes per policy**
+- **50 repeats** per (setting × task) combination
+- **20 settings** × 50 tasks × 50 repeats = **50,000 episodes per policy**
 - **3 policies**: Motus, Pi0.5, LingbotVA
 
 All perturbation parameters, seeds, and timing are pre-generated in `benchmark_spec.json` for full reproducibility.
+Each task uses one verified environment seed (reused across all settings and repeats), while perturbation parameters are resampled per repeat.
 
 ## Directory Structure
 
@@ -224,7 +225,7 @@ ffmpeg -version
 bash scripts/generate_spec.sh
 ```
 
-This creates `benchmark/benchmark_spec.json` with deterministic perturbation configs for all 5,000 episodes.
+This creates `benchmark/benchmark_spec.json` with deterministic perturbation configs for all 50,000 episodes.
 
 ### 2. Update Policy Configs (critical)
 
@@ -326,9 +327,9 @@ Reproducibility is guaranteed by:
 
 1. fixed benchmark generation seed (`master_seed`)
 2. fixed task list (`tasks_all.txt`)
-3. fixed repeats (`5`)
+3. fixed repeats (`50`)
 4. fixed perturbation config per (setting, task, repeat)
-5. fixed environment seed per (setting, task, repeat)
+5. fixed environment seed per task (same seed reused for all settings/repeats)
 
 Do **not** regenerate `benchmark_spec.json` with different arguments if you want comparable results.
 
