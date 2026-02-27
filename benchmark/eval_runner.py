@@ -139,6 +139,7 @@ def run_single_episode(
     seed: int,
     perturb_cfg: PerturbationConfig,
     video_size: Optional[str] = None,
+    repeat_idx: int = 0,
 ) -> Dict[str, Any]:
     """Run a single episode with perturbation.
 
@@ -205,7 +206,7 @@ def run_single_episode(
                     "-video_size", video_size, "-framerate", "10",
                     "-i", "-", "-pix_fmt", "yuv420p",
                     "-vcodec", "libx264", "-crf", "23",
-                    f"{task_env.eval_video_path}/episode{task_env.test_num}.mp4",
+                    f"{task_env.eval_video_path}/episode{repeat_idx}.mp4",
                 ],
                 stdin=subprocess.PIPE,
             )
@@ -238,7 +239,6 @@ def run_single_episode(
         result["steps"] = task_env.take_action_cnt
 
         task_env.close_env(clear_cache=True)
-        task_env.test_num += 1
 
     except Exception as e:
         result["error"] = f"eval_error: {e}\n{traceback.format_exc()}"
@@ -376,6 +376,7 @@ def run_benchmark(
                     seed=env_seed,
                     perturb_cfg=perturb_cfg,
                     video_size=video_size,
+                    repeat_idx=ri,
                 )
 
                 # Add metadata
