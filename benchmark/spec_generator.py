@@ -187,7 +187,13 @@ def _generate_stable_seeds_by_task(
     task_config_name: str,
     max_seed_trials_per_task: int,
 ) -> Dict[str, List[int]]:
-    """Generate stable+solvable env seeds once per task, reused across all settings."""
+    """Generate stable+solvable env seeds once per task, reused across all settings.
+
+    WARNING: This launches SAPIEN for every candidate seed. Due to GPU resource
+    leaks in SAPIEN, this may fail when run serially across many tasks in a
+    single process. Prefer `_load_stable_seeds_from_dataset` when a clean
+    expert-demo dataset is available.
+    """
     print("Prechecking stable seeds (expert-solvable) ...")
     base_args = _setup_env_args(_load_task_config(task_config_name))
     base_args["eval_mode"] = True
@@ -228,6 +234,51 @@ def _generate_stable_seeds_by_task(
     return stable_seeds_by_task
 
 
+def _load_stable_seeds_from_dataset(
+    tasks: List[str],
+    repeats_per_setting: int,
+    master_seed: int,
+    dataset_root: str,
+) -> Dict[str, List[int]]:
+    """Load stable seeds from an existing clean expert-demo dataset.
+
+    Each episode file in ``<dataset_root>/<task>/qpos/<N>.pt`` indicates that
+    seed *N* was successfully used to collect an expert demo, so it is
+    inherently stable and solvable. We deterministically select *repeats*
+    seeds per task using a seeded RNG (for reproducibility).
+    """
+    print(f"Loading stable seeds from dataset: {dataset_root}")
+    seed_rng = np.random.default_rng(master_seed + 2027)
+    stable_seeds_by_task: Dict[str, List[int]] = {}
+
+    for task_name in tasks:
+        qpos_dir = os.path.join(dataset_root, task_name, "qpos")
+        if not os.path.isdir(qpos_dir):
+            raise FileNotFoundError(
+                f"No qpos directory for task '{task_name}' at {qpos_dir}"
+            )
+
+        available = sorted(
+            int(f.replace(".pt", ""))
+            for f in os.listdir(qpos_dir)
+            if f.endswith(".pt")
+        )
+
+        if len(available) < repeats_per_setting:
+            raise RuntimeError(
+                f"Task '{task_name}' only has {len(available)} episodes in dataset, "
+                f"but {repeats_per_setting} are required."
+            )
+
+        # Deterministic shuffle + pick first N
+        shuffled = seed_rng.permutation(available).tolist()
+        selected = sorted(shuffled[:repeats_per_setting])
+        stable_seeds_by_task[task_name] = selected
+        print(f"  {task_name}: selected seeds {selected} (from {len(available)} available)")
+
+    return stable_seeds_by_task
+
+
 def compute_t_on_raw(task_name: str) -> int:
     """Compute t_on_raw for onset_then_always timing.
 
@@ -257,6 +308,7 @@ def generate_benchmark_spec(
     ensure_stable_seeds: bool = True,
     task_config_name: str = "demo_clean",
     max_seed_trials_per_task: int = 400,
+    dataset_root: str | None = None,
 ) -> Dict[str, Any]:
     """Generate the full benchmark specification.
 
@@ -266,6 +318,9 @@ def generate_benchmark_spec(
       - repeats_per_setting: number of repeats
       - perturbation_configs: nested dict [setting_id][task_name] -> list of configs
       - env_seeds: nested dict [setting_id][task_name] -> list of starting seeds
+
+    If *dataset_root* is provided, stable seeds are read from the clean dataset
+    (fast, no SAPIEN required). Otherwise falls back to SAPIEN-based precheck.
     """
     master_rng = np.random.default_rng(master_seed)
 
@@ -275,13 +330,21 @@ def generate_benchmark_spec(
 
     stable_seeds_by_task: Dict[str, List[int]] = {}
     if ensure_stable_seeds:
-        stable_seeds_by_task = _generate_stable_seeds_by_task(
-            tasks=tasks,
-            repeats_per_setting=repeats_per_setting,
-            master_seed=master_seed,
-            task_config_name=task_config_name,
-            max_seed_trials_per_task=max_seed_trials_per_task,
-        )
+        if dataset_root is not None:
+            stable_seeds_by_task = _load_stable_seeds_from_dataset(
+                tasks=tasks,
+                repeats_per_setting=repeats_per_setting,
+                master_seed=master_seed,
+                dataset_root=dataset_root,
+            )
+        else:
+            stable_seeds_by_task = _generate_stable_seeds_by_task(
+                tasks=tasks,
+                repeats_per_setting=repeats_per_setting,
+                master_seed=master_seed,
+                task_config_name=task_config_name,
+                max_seed_trials_per_task=max_seed_trials_per_task,
+            )
 
     for perturb_type in BENCHMARK_PERTURB_TYPES:
         for severity in Severity:
@@ -365,6 +428,13 @@ def main():
         action="store_true",
         help="Disable stability/expert precheck for env seeds (not recommended).",
     )
+    parser.add_argument(
+        "--dataset-root",
+        type=str,
+        default=None,
+        help="Path to clean expert-demo dataset to read stable seeds from "
+             "(e.g. /path/to/robotwin_dataset/clean). Avoids SAPIEN precheck.",
+    )
     args = parser.parse_args()
 
     # Load tasks
@@ -384,6 +454,7 @@ def main():
         ensure_stable_seeds=not args.no_stable_seed_check,
         task_config_name=args.task_config,
         max_seed_trials_per_task=args.max_seed_trials_per_task,
+        dataset_root=args.dataset_root,
     )
 
     # Save
