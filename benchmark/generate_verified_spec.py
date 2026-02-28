@@ -335,6 +335,22 @@ def merge_parts(parts_dir: str, spec_path: str, output_path: str):
                 merged_seeds[sid] = {}
             merged_seeds[sid].update(task_data)
 
+    # Backfill missing tasks inside VERIFIED settings.
+    # A setting may be present in merged_configs but still miss a few tasks
+    # if some split parts were not generated; in that case, keep consistency
+    # by falling back to original spec entries trimmed to num_effective.
+    for sid, task_map in merged_configs.items():
+        if sid not in orig_spec["perturbation_configs"]:
+            continue
+        if sid not in merged_seeds:
+            merged_seeds[sid] = {}
+
+        for task in orig_spec["tasks"]:
+            if task not in task_map:
+                task_map[task] = orig_spec["perturbation_configs"][sid][task][:num_effective]
+            if task not in merged_seeds[sid]:
+                merged_seeds[sid][task] = orig_spec["env_seeds"][sid][task][:num_effective]
+
     # Build new spec
     new_spec = {
         "master_seed": orig_spec["master_seed"],

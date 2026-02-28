@@ -331,6 +331,12 @@ def run_benchmark(
         setting_seeds = spec["env_seeds"][setting_id]
 
         for ti, task_name in enumerate(tasks):
+            if task_name not in setting_configs or task_name not in setting_seeds:
+                print(
+                    f"[WARN] skip missing task in spec: setting={setting_id}, task={task_name}"
+                )
+                continue
+
             task_configs = setting_configs[task_name]
             task_seeds = setting_seeds[task_name]
 
