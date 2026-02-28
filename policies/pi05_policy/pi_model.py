@@ -4,8 +4,8 @@
 #!/usr/bin/python3
 """
 import json
+import os
 import sys
-import jax
 import numpy as np
 from openpi.models import model as _model
 from openpi.policies import aloha_policy
@@ -26,19 +26,22 @@ from openpi.training import data_loader as _data_loader
 
 class PI0:
 
-    def __init__(self, train_config_name, model_name, checkpoint_id, pi0_step):
+    def __init__(self, train_config_name, model_name, checkpoint_id, pi0_step, checkpoint_dir=None):
         self.train_config_name = train_config_name
         self.model_name = model_name
         self.checkpoint_id = checkpoint_id
 
-        specified_path = f"policy/pi0/checkpoints/{self.train_config_name}/{self.model_name}/{self.checkpoint_id}/assets/"
-        entries = os.listdir(specified_path)
+        if checkpoint_dir is None:
+            checkpoint_dir = f"policy/pi0/checkpoints/{self.train_config_name}/{self.model_name}/{self.checkpoint_id}"
+
+        assets_path = os.path.join(checkpoint_dir, "assets")
+        entries = os.listdir(assets_path)
         assets_id = entries[0]
 
         config = _config.get_config(self.train_config_name)
         self.policy = _policy_config.create_trained_policy(
             config,
-            f"policy/pi0/checkpoints/{self.train_config_name}/{self.model_name}/{self.checkpoint_id}",
+            checkpoint_dir,
             robotwin_repo_id=assets_id,
             )
         print("loading model success!")

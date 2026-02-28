@@ -122,9 +122,13 @@ def get_camera_config(camera_type: str) -> Dict[str, Any]:
 def generate_instruction(task_name: str, episode_info_list: list, test_num: int,
                          instruction_type: str = "seen") -> str:
     """Generate a language instruction for the task."""
-    from generate_episode_instructions import generate_episode_descriptions
+    from generate_episode_instructions import generate_episode_descriptions, load_task_instructions
     results = generate_episode_descriptions(task_name, episode_info_list, test_num)
-    return np.random.choice(results[0][instruction_type])
+    if results and results[0].get(instruction_type):
+        return np.random.choice(results[0][instruction_type])
+    # Fallback: use the task's full_description when no templated instructions match
+    task_data = load_task_instructions(task_name)
+    return task_data.get("full_description", f"Complete the {task_name} task.")
 
 
 # ============================================================

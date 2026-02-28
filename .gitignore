@@ -47,6 +47,9 @@ logs/
 *.mp4
 *.avi
 
+# Verified spec generation artifacts (intermediate parts)
+verified_spec_parts/
+
 # Symlinks (recreated per-machine, see README)
 envs
 task_config

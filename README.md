@@ -36,7 +36,7 @@ robotwin-perturbed-bench/
 │   └── lingbot_va/              # LingbotVA websocket client + server launch script
 ├── configs/
 │   ├── motus.yml                # Motus model paths
-│   ├── pi05.yml                 # Pi0.5 model paths
+│   ├── pi05_robotwin2.yml       # Pi0.5 (HF pi0.5_robotwin2) model paths
 │   └── lingbot_va.yml           # LingbotVA server config
 ├── scripts/
 │   ├── generate_spec.sh         # Step 1: generate benchmark spec
@@ -145,9 +145,11 @@ its runtime checkpoints/models.
    - `wan_path`: Wan2.2-TI2V-5B weights
    - `vlm_path`: Qwen3-VL-2B-Instruct weights
    - *(No `policy_dir` needed — code is self-contained in `policies/motus_policy/`)*
-2. **Pi0.5** — update `configs/pi05.yml`:
+2. **Pi0.5** — use `configs/pi05_robotwin2.yml` (default):
+   - Pre-trained checkpoint: [motus-robotics/pi0.5_robotwin2](https://huggingface.co/motus-robotics/pi0.5_robotwin2)
+   - Download and setup (see [Pi0.5 Setup](#pi05-setup) below)
+   - `checkpoint_dir`: absolute path to the downloaded checkpoint
    - `robotwin_root`: path to your RoboTwin repo
-   - `train_config_name`, `model_name`, `checkpoint_id`
    - *(No `policy_dir` needed — code is self-contained in `policies/pi05_policy/`)*
 3. **LingbotVA** — update `configs/lingbot_va.yml`:
    - `robotwin_root`: path to your RoboTwin repo
@@ -243,7 +245,7 @@ On new machines, update these files first:
 
 - `scripts/*.sh`: optionally pass `PYTHON=/path/to/python`
 - `configs/motus.yml`: `robotwin_root` + model checkpoint paths
-- `configs/pi05.yml`: `robotwin_root` + model identifiers
+- `configs/pi05_robotwin2.yml`: `checkpoint_dir` + `robotwin_root`
 - `configs/lingbot_va.yml`: `robotwin_root` + server host/port
 
 No `policy_dir` or `lingbot_va_root` paths needed — all policy code is self-contained.
@@ -285,10 +287,70 @@ bash scripts/generate_spec.sh
 Edit these files to your real paths:
 
 - `configs/motus.yml` — `robotwin_root`, `checkpoint_path`, `wan_path`, `vlm_path`
-- `configs/pi05.yml` — `robotwin_root`, `train_config_name`, `model_name`, `checkpoint_id`
+- `configs/pi05_robotwin2.yml` — `checkpoint_dir`, `robotwin_root` (see [Pi0.5 Setup](#pi05-setup))
 - `configs/lingbot_va.yml` — `robotwin_root`, `host`, `port`
 
 No external `policy_dir` or `lingbot_va_root` needed. If model paths are wrong, loading will fail before the first episode.
+
+#### <a name="pi05-setup"></a>Pi0.5 Setup (motus-robotics/pi0.5_robotwin2)
+
+**Step 1: Download the checkpoint from HuggingFace**
+
+```bash
+# Install huggingface-cli if not available
+pip install huggingface_hub
+
+# Download model weights + norm stats (skip optimizer.pt — not needed for inference)
+huggingface-cli download motus-robotics/pi0.5_robotwin2 \
+    model.safetensors \
+    assets/pi0.5_clean_randomize_joint_training/norm_stats.json \
+    --local-dir /gemini/code/models/pi05_robotwin2
+```
+
+**Step 2: Verify directory structure**
+
+After download, you should have:
+
+```text
+/gemini/code/models/pi05_robotwin2/
+  model.safetensors                                          # 7.47 GB (PyTorch weights)
+  assets/
+    pi0.5_clean_randomize_joint_training/
+      norm_stats.json                                        # Normalization statistics
+```
+
+**Step 3: Update config** (if using a different path)
+
+Edit `configs/pi05_robotwin2.yml`:
+
+```yaml
+checkpoint_dir: /path/to/your/pi05_robotwin2   # must contain model.safetensors + assets/
+robotwin_root: /path/to/your/robotwin           # RoboTwin simulator repo
+pi0_step: 32                                    # action horizon (model generates 32 actions/step)
+```
+
+**Step 4: Run**
+
+```bash
+# Full benchmark
+bash scripts/run_pi05.sh 0
+
+# With specific settings/tasks
+bash scripts/run_pi05.sh 0 "scale_lm_always_on" "adjust_bottle"
+
+# Skip expert check (if CuroboPlanner unavailable)
+SKIP_EXPERT_CHECK=1 bash scripts/run_pi05.sh 0
+
+# Use a different config file
+POLICY_CONFIG=configs/pi05_robotwin2.yml bash scripts/run_pi05.sh 0
+```
+
+**Model details:**
+- Base: pi0.5 official base model (JAX → PyTorch converted)
+- Fine-tuned on: 50 RoboTwin 2.0 tasks (clean + randomized, joint training)
+- Action space: 14D qpos (delta joint actions, `adapt_to_pi=True`)
+- Action horizon: 32 steps per inference call
+- Config name: `pi05_robotwin2` (registered in `policies/pi05_policy/src/openpi/training/config.py`)
 
 ### 3. Run Evaluation
 
@@ -445,6 +507,14 @@ If using HTTPS + PAT:
 If using SSH:
 - ensure `ssh -T git@github.com` succeeds first.
 
+## Benchmark Spec Variants
+
+| File | Settings | Tasks | Repeats | Total/policy | Description |
+|------|----------|-------|---------|-------------|-------------|
+| `benchmark/benchmark_spec.json` | 20 (all) | 50 | 50 | 50,000 | Full benchmark (all severities) |
+| `benchmark/benchmark_spec_lm20.json` | 10 (lm only) | 50 | 20 | 10,000 | Compact benchmark for quick multi-machine eval |
+| `benchmark/benchmark_spec_verified.json` | 10 (lm) | 50 | 20 | 10,000 | Verified perturbations (generated via `generate_verified_spec.py`) |
+
 ## Settings (20 total)
 
 5 types × 2 severities × 2 timings = 20 settings:
@@ -456,6 +526,35 @@ If using SSH:
 | iir | lm, high | always_on, onset_then_always |
 | fir | lm, high | always_on, onset_then_always |
 | bias | lm, high | always_on, onset_then_always |
+
+## Multi-Machine Experiment Workflow
+
+For running experiments across multiple machines and syncing via GitHub, see
+**[docs/multi_machine_sync.md](docs/multi_machine_sync.md)**.
+
+Key points:
+- Each machine runs a partition of experiments using `--worker-id` / `--num-workers`
+- Results are synced via `git push/pull` (episode JSONs have unique paths, no conflicts)
+- Use `report_generation.py` to generate unified reports from merged results
+
+## Report Generation
+
+Unified progress and success-rate reporting across any number of policies:
+
+```bash
+# Auto-detect all policies, print to terminal
+python report_generation.py --results-dir results
+
+# Export portable Markdown + JSON
+python report_generation.py --results-dir results \
+    --export-md report.md --export-json report.json
+
+# Use lm-only spec for expected counts
+python report_generation.py --results-dir results \
+    --spec benchmark/benchmark_spec_lm20.json
+```
+
+Full documentation: **[docs/report_generation.md](docs/report_generation.md)**
 
 ## Environment
 

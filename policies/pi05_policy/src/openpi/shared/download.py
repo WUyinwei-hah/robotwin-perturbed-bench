@@ -168,7 +168,8 @@ def _ensure_permissions(path: pathlib.Path) -> None:
 
 def _get_mtime(year: int, month: int, day: int) -> float:
     """Get the mtime of a given date at midnight UTC."""
-    date = datetime.datetime(year, month, day, tzinfo=datetime.UTC)
+    utc_tz = getattr(datetime, "UTC", datetime.timezone.utc)
+    date = datetime.datetime(year, month, day, tzinfo=utc_tz)
     return time.mktime(date.timetuple())
 
 

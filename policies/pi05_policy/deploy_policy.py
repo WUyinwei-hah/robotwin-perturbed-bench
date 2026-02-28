@@ -25,7 +25,8 @@ def encode_obs(observation):
 def get_model(usr_args):
     train_config_name, model_name, checkpoint_id, pi0_step = (usr_args["train_config_name"], usr_args["model_name"],
                                                               usr_args["checkpoint_id"], usr_args["pi0_step"])
-    return PI0(train_config_name, model_name, checkpoint_id, pi0_step)
+    checkpoint_dir = usr_args.get("checkpoint_dir", None)
+    return PI0(train_config_name, model_name, checkpoint_id, pi0_step, checkpoint_dir=checkpoint_dir)
 
 
 def eval(TASK_ENV, model, observation):

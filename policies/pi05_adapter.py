@@ -40,9 +40,12 @@ class Pi05Adapter(PolicyAdapter):
         # Use self-contained Pi0.5 policy code
         _bench_root = str(Path(__file__).resolve().parent.parent)
         policy_dir = os.path.join(_bench_root, "policies", "pi05_policy")
+        policy_src_dir = os.path.join(policy_dir, "src")
 
         if policy_dir not in sys.path:
             sys.path.insert(0, policy_dir)
+        if policy_src_dir not in sys.path:
+            sys.path.insert(0, policy_src_dir)
 
         import importlib.util
         spec = importlib.util.spec_from_file_location(
@@ -59,6 +62,7 @@ class Pi05Adapter(PolicyAdapter):
             "model_name": config["model_name"],
             "checkpoint_id": config.get("checkpoint_id", 30000),
             "pi0_step": config.get("pi0_step", 50),
+            "checkpoint_dir": config.get("checkpoint_dir", None),
         }
 
         self.model = module.get_model(usr_args)

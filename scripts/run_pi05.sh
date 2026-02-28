@@ -5,7 +5,8 @@
 #   bash scripts/run_pi05.sh [GPU_ID] [SETTINGS] [TASKS]
 #
 # Environment variables:
-#   SKIP_EXPERT_CHECK=1  Skip expert demo verification (use when CuroboPlanner unavailable)
+#   SKIP_EXPERT_CHECK=1    Skip expert demo verification (use when CuroboPlanner unavailable)
+#   POLICY_CONFIG=<path>   Override policy config file (default: configs/pi05_robotwin2.yml)
 
 set -e
 
@@ -35,9 +36,11 @@ echo "Running Pi0.5 benchmark on GPU $GPU_ID"
 echo "Settings filter: ${SETTINGS:-all}"
 echo "Tasks filter: ${TASKS:-all}"
 
+PI05_CONFIG="${POLICY_CONFIG:-configs/pi05_robotwin2.yml}"
+
 $PYTHON -m benchmark.eval_runner \
     --policy pi05 \
-    --policy-config configs/pi05.yml \
+    --policy-config "$PI05_CONFIG" \
     --spec benchmark/benchmark_spec.json \
     --output results \
     --task-config demo_clean \

@@ -698,6 +698,36 @@ _CONFIGS = [
         num_train_steps=30000,
         fsdp_devices=1,  # refer line 359
     ),
+    # pi05_robotwin2: motus-robotics/pi0.5_robotwin2 from HuggingFace
+    # Trained with action_horizon=32, adapt_to_pi=True, use_delta_joint_actions=True
+    # on clean + randomized RoboTwin 2.0 data (50 tasks).
+    TrainConfig(
+        name="pi05_robotwin2",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=32),
+        data=LeRobotAlohaDataConfig(
+            repo_id="clean_randomized_joint_training",
+            repack_transforms=_transforms.Group(inputs=[
+                _transforms.RepackTransform({
+                    "images": {
+                        "cam_high": "high_image",
+                        "cam_left_wrist": "left_wrist_image",
+                        "cam_right_wrist": "right_wrist_image",
+                    },
+                    "state": "state",
+                    "actions": "actions",
+                    "prompt": "prompt",
+                })
+            ]),
+            base_config=DataConfig(
+                prompt_from_task=True,
+            ),
+            adapt_to_pi=True,
+            use_delta_joint_actions=True,
+            action_sequence_keys=("actions",),
+        ),
+        num_train_steps=1_000_000,
+        batch_size=128,
+    ),
     #
     # RoboArena configs.
     #

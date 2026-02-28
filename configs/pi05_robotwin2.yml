@@ -1,0 +1,22 @@
+# Pi0.5 RoboTwin2 policy configuration
+# Model: motus-robotics/pi0.5_robotwin2 (HuggingFace)
+# Trained on clean + randomized RoboTwin 2.0 data (50 tasks)
+# action_horizon=32, adapt_to_pi=True, use_delta_joint_actions=True
+
+robotwin_root: /gemini/code/robotwin
+
+# Model config — must match the training config name in openpi config.py
+train_config_name: pi05_robotwin2
+model_name: pi05_robotwin2
+checkpoint_id: 1
+
+# Action horizon: model generates 32 actions per step, execute all of them
+pi0_step: 32
+
+# Absolute path to the downloaded checkpoint directory.
+# Must contain: model.safetensors, assets/<asset_id>/norm_stats.json
+# Download with:
+#   huggingface-cli download motus-robotics/pi0.5_robotwin2 \
+#       model.safetensors assets/pi0.5_clean_randomize_joint_training/norm_stats.json \
+#       --local-dir /gemini/code/models/pi05_robotwin2
+checkpoint_dir: /gemini/code/models/pi05_robotwin2
