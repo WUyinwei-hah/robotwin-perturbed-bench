@@ -166,15 +166,19 @@ Expected artifacts:
 
 ## 8) Full run commands
 
+**Always use `SKIP_EXPERT_CHECK=1`** — seeds are pre-verified in the spec, so the
+Phase 1 expert check (CuroboPlanner IK) is unnecessary. Skipping it avoids false
+`expert_failed` errors and ensures every episode produces a video.
+
 ```bash
-# Motus
-PYTHON=${PYTHON:-python} bash scripts/run_motus.sh 0
+# Motus (recommended: skip expert check)
+SKIP_EXPERT_CHECK=1 PYTHON=${PYTHON:-python} bash scripts/run_motus.sh 0
 
 # Pi0.5
-PYTHON=${PYTHON:-python} bash scripts/run_pi05.sh 0
+SKIP_EXPERT_CHECK=1 PYTHON=${PYTHON:-python} bash scripts/run_pi05.sh 0
 
 # LingbotVA (server must be running first)
-PYTHON=${PYTHON:-python} bash scripts/run_lingbot_va.sh 0
+SKIP_EXPERT_CHECK=1 PYTHON=${PYTHON:-python} bash scripts/run_lingbot_va.sh 0
 ```
 
 Resume behavior is enabled automatically (existing `episode_*.json` is skipped).
@@ -183,13 +187,26 @@ Resume behavior is enabled automatically (existing `episode_*.json` is skipped).
 
 ## 9) LingbotVA extra steps
 
-1. Start LingbotVA server first (in lingbot-va repo)
-2. Ensure `configs/lingbot_va.yml:port` matches server port
-3. Then run `run_lingbot_va.sh`
+1. Start LingbotVA server first (in lingbot-va repo) — one server per GPU.
+2. **For multi-GPU parallel runs**: create a **per-GPU config** file for each client,
+   each pointing to a different server port:
+   - `configs/lingbot_va_gpu4.yml` → port 29056
+   - `configs/lingbot_va_gpu5.yml` → port 29057
+   - `configs/lingbot_va_gpu6.yml` → port 29058
+   - `configs/lingbot_va_gpu7.yml` → port 29059
+3. Launch each client with its own config:
+   ```bash
+   SKIP_EXPERT_CHECK=1 python -m benchmark.eval_runner \
+     --policy lingbot_va --policy-config configs/lingbot_va_gpu4.yml \
+     --spec benchmark/benchmark_spec_lm20.json --output results \
+     --gpu 4 --skip-expert-check
+   ```
+4. **Do NOT** use a single shared `lingbot_va.yml` for multiple clients — all clients
+   will connect to the same server, causing concurrent inference crashes (websocket 1011).
 
 If blocked/timeouts occur:
 - verify server process is alive
-- verify port connectivity
+- verify port connectivity (each client → its own server)
 - verify prompt/action protocol compatibility
 
 ---

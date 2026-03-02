@@ -23,23 +23,29 @@ The active Pi0.5 evaluation uses a **reduced spec** (`benchmark_spec_lm20.json`)
 - **20 repeats** per (setting × task) — using `benchmark_spec_lm20.json`
 - **5 settings × 50 tasks × 20 repeats = 5,000 episodes total**
 - `onset_then_always` settings are **excluded** from this run
+- **`--skip-expert-check` is used for all runs** — seeds are pre-verified in the spec,
+  so Phase 1 expert check (CuroboPlanner IK) is skipped to avoid false `expert_failed` errors
+  and to ensure every episode produces a video.
 
-Run command (8 GPUs, bias-heavy allocation):
+### Current Motus + LingbotVA run (8 GPUs)
 
-```bash
-# GPU 0,5,6,7: bias only
-# GPU 1: coupling → bias fallback
-# GPU 2: scale → bias fallback
-# GPU 3: iir → bias fallback
-# GPU 4: fir → bias fallback
-bash scripts/run_pi05.sh <GPU_ID> "<SETTINGS>"
-```
+| GPU | Policy | Config | Port |
+|-----|--------|--------|------|
+| 0–3 | Motus | `configs/motus.yml` | — |
+| 4 | LingbotVA | `configs/lingbot_va_gpu4.yml` | 29056 |
+| 5 | LingbotVA | `configs/lingbot_va_gpu5.yml` | 29057 |
+| 6 | LingbotVA | `configs/lingbot_va_gpu6.yml` | 29058 |
+| 7 | LingbotVA | `configs/lingbot_va_gpu7.yml` | 29059 |
+
+> **Important**: Each LingbotVA client must use a **per-GPU config** pointing to its own
+> server port. Using a single shared config causes all clients to hit one server,
+> leading to concurrent inference crashes (websocket 1011).
 
 Monitor progress:
 
 ```bash
-python watch_pi05.py           # refresh every 30s
-python watch_pi05.py --once    # single snapshot
+python scripts/watch_benchmark.py           # refresh every 30s
+python scripts/watch_benchmark.py --once    # single snapshot
 ```
 
 ## Directory Structure
@@ -382,22 +388,26 @@ POLICY_CONFIG=configs/pi05_robotwin2.yml bash scripts/run_pi05.sh 0
 ### 3. Run Evaluation
 
 ```bash
-# Full benchmark (all settings, all tasks)
-bash scripts/run_motus.sh 0
+# Full benchmark (all settings, all tasks) — skip expert check (recommended)
+SKIP_EXPERT_CHECK=1 bash scripts/run_motus.sh 0
 
 # Specific settings/tasks
-bash scripts/run_motus.sh 0 "scale_lm_always_on,bias_high_always_on"
-bash scripts/run_motus.sh 0 "" "adjust_bottle,click_bell"
+SKIP_EXPERT_CHECK=1 bash scripts/run_motus.sh 0 "scale_lm_always_on,bias_high_always_on"
+SKIP_EXPERT_CHECK=1 bash scripts/run_motus.sh 0 "" "adjust_bottle,click_bell"
 
 # Pi0.5
-bash scripts/run_pi05.sh 1
+SKIP_EXPERT_CHECK=1 bash scripts/run_pi05.sh 1
 
-# LingbotVA (server must be running separately)
-bash scripts/run_lingbot_va.sh 2
+# LingbotVA (server must be running; use per-GPU config for multi-GPU)
+SKIP_EXPERT_CHECK=1 bash scripts/run_lingbot_va.sh 2
 
-# Skip expert check (when CuroboPlanner is unavailable)
-SKIP_EXPERT_CHECK=1 bash scripts/run_motus.sh 0
+# Without skip (only if you need expert check validation)
+bash scripts/run_motus.sh 0
 ```
+
+> **Recommendation**: Always use `SKIP_EXPERT_CHECK=1` (or `--skip-expert-check` via
+> `eval_runner.py`) when seeds are pre-verified in the spec. This avoids false
+> `expert_failed` errors from CuroboPlanner and ensures every episode records a video.
 
 #### Practical run strategy (recommended)
 

@@ -57,6 +57,19 @@
   monitor usage. Added "RoboTwin Upstream Bug Fixes" section with patches for `open_laptop.py`
   and `place_object_scale.py`. Updated Settings section to show both full (20) and current (5) settings.
 
+### Switch to `--skip-expert-check` for all Motus + LingbotVA runs
+
+- All 8 benchmark sessions (4 Motus + 4 LingbotVA) now run with `--skip-expert-check`.
+- **Rationale**: Phase 1 expert check uses CuroboPlanner IK solver, which is slow and
+  occasionally fails with `expert_failed` / `expert_check_error` even on valid seeds.
+  Since all seeds in `benchmark_spec_lm20.json` are **pre-verified** during spec generation,
+  the expert check is redundant and wastes time. Skipping it also eliminates the
+  "missing video" issue (videos are only created in Phase 2, so expert-failed episodes
+  had JSON but no video).
+- Deleted 85 lingbot episodes that had `expert_failed` / `eval_error` / `expert_check_error`
+  without videos, plus 7 orphan video files. Resume mechanism will regenerate them
+  with `--skip-expert-check` (directly entering Phase 2 policy evaluation).
+
 ### LingbotVA lm20 always_on: transient 1011 root cause & fix (Motus + LingbotVA run)
 
 #### Root Cause (confirmed)
