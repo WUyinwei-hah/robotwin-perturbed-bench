@@ -15,6 +15,33 @@ A reproducible benchmark for evaluating robotic manipulation policies under fixe
 All perturbation parameters, seeds, and timing are pre-generated in `benchmark_spec.json` for full reproducibility.
 Each task uses one verified environment seed (reused across all settings and repeats), while perturbation parameters are resampled per repeat.
 
+## Current Pi0.5 Experiment (lm20 always_on subset)
+
+The active Pi0.5 evaluation uses a **reduced spec** (`benchmark_spec_lm20.json`) with only the `always_on` timing mode:
+
+- **5 settings**: `scale_lm_always_on`, `bias_lm_always_on`, `coupling_lm_always_on`, `iir_lm_always_on`, `fir_lm_always_on`
+- **20 repeats** per (setting × task) — using `benchmark_spec_lm20.json`
+- **5 settings × 50 tasks × 20 repeats = 5,000 episodes total**
+- `onset_then_always` settings are **excluded** from this run
+
+Run command (8 GPUs, bias-heavy allocation):
+
+```bash
+# GPU 0,5,6,7: bias only
+# GPU 1: coupling → bias fallback
+# GPU 2: scale → bias fallback
+# GPU 3: iir → bias fallback
+# GPU 4: fir → bias fallback
+bash scripts/run_pi05.sh <GPU_ID> "<SETTINGS>"
+```
+
+Monitor progress:
+
+```bash
+python watch_pi05.py           # refresh every 30s
+python watch_pi05.py --once    # single snapshot
+```
+
 ## Directory Structure
 
 ```
@@ -451,6 +478,53 @@ Reproducibility is guaranteed by:
 
 Do **not** regenerate `benchmark_spec.json` with different arguments if you want comparable results.
 
+## RoboTwin Upstream Bug Fixes
+
+During the Pi0.5 benchmark run, two bugs were found and patched locally in the `RoboTwin` environment code.
+If you run on a fresh clone of `RoboTwin-Platform/RoboTwin`, you must apply these patches manually.
+
+### Fix 1: `open_laptop.py` — `arm_tag` AttributeError in `check_success()`
+
+**File**: `envs/open_laptop.py`, `check_success()` method
+
+**Root cause**: `arm_tag` is set inside `play_once()`, but when `--skip-expert-check` is used, `play_once()` never runs. `check_success()` is called from `_base_task.py:take_action()` at every step, triggering `AttributeError: 'open_laptop' object has no attribute 'arm_tag'`.
+
+**Patch** (apply to `envs/open_laptop.py`):
+
+```python
+def check_success(self, target=0.4):
++   if not hasattr(self, 'arm_tag') or self.arm_tag is None:
++       # arm_tag not yet determined (play_once hasn't run, e.g. skip-expert-check)
++       # Fall back to checking laptop qpos only
++       limit = self.laptop.get_qlimits()[0]
++       qpos = self.laptop.get_qpos()
++       return qpos[0] >= limit[0] + (limit[1] - limit[0]) * target
+    limit = self.laptop.get_qlimits()[0]
+    ...
+```
+
+### Fix 2: `place_object_scale.py` — `arm_tag` AttributeError in `check_success()`
+
+**File**: `envs/place_object_scale.py`, `check_success()` method
+
+**Root cause**: Same as above — `arm_tag` used before `play_once()` has run.
+
+**Patch** (apply to `envs/place_object_scale.py`):
+
+```python
+def check_success(self):
+    ...
+    distance = np.linalg.norm(np.array(scale_pose[:2]) - np.array(object_pose[:2]))
++   if not hasattr(self, 'arm_tag') or self.arm_tag is None:
++       return (distance < distance_threshold and object_pose[2] > (scale_pose[2] - 0.01))
+    check_arm = (self.is_left_gripper_open if self.arm_tag == "left" else self.is_right_gripper_open)
+    return (distance < distance_threshold and object_pose[2] > (scale_pose[2] - 0.01) and check_arm())
+```
+
+> These patches are already applied in `/gemini/code/robotwin/envs/` on this machine.
+> They do **not** affect the evaluation correctness — the fallback logic is equivalent to the full check
+> when `arm_tag` is not yet determined, and full logic takes over after `play_once()` sets `arm_tag`.
+
 ## Troubleshooting
 
 ### 1) `not a valid checkpoint/path not found`
@@ -515,7 +589,9 @@ If using SSH:
 | `benchmark/benchmark_spec_lm20.json` | 10 (lm only) | 50 | 20 | 10,000 | Compact benchmark for quick multi-machine eval |
 | `benchmark/benchmark_spec_verified.json` | 10 (lm) | 50 | 20 | 10,000 | Verified perturbations (generated via `generate_verified_spec.py`) |
 
-## Settings (20 total)
+## Settings
+
+### Full benchmark (20 total)
 
 5 types × 2 severities × 2 timings = 20 settings:
 
@@ -526,6 +602,19 @@ If using SSH:
 | iir | lm, high | always_on, onset_then_always |
 | fir | lm, high | always_on, onset_then_always |
 | bias | lm, high | always_on, onset_then_always |
+
+### Current Pi0.5 run (5 settings, always_on only)
+
+| Setting ID | Type | Severity | Timing |
+|---|---|---|---|
+| `scale_lm_always_on` | scale | lm | always_on |
+| `bias_lm_always_on` | bias | lm | always_on |
+| `coupling_lm_always_on` | coupling | lm | always_on |
+| `iir_lm_always_on` | iir | lm | always_on |
+| `fir_lm_always_on` | fir | lm | always_on |
+
+`onset_then_always` settings were excluded from the Pi0.5 run to reduce experiment scope.
+Spec file used: `benchmark/benchmark_spec_lm20.json` (10 lm settings, 20 repeats, 10k episodes per policy — filtered to 5 always_on at runtime via `--settings`).
 
 ## Multi-Machine Experiment Workflow
 

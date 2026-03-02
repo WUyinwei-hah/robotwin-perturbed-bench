@@ -19,7 +19,7 @@ GPU_ID="${1:-0}"
 SETTINGS="${2:-}"
 TASKS="${3:-}"
 
-PYTHON="${PYTHON:-/gemini/code/envs/robotwin/bin/python}"
+PYTHON="${PYTHON:-/gemini/code/envs/robotwin_pi05/bin/python}"
 
 EXTRA_ARGS=""
 if [ -n "$SETTINGS" ]; then
