@@ -393,17 +393,27 @@ def run_benchmark(
                 # Deep-copy env_args per episode to avoid mutation
                 ep_env_args = copy.deepcopy(env_args)
 
-                result = run_single_episode(
-                    task_name=task_name,
-                    task_env=TASK_ENV,
-                    env_args=ep_env_args,
-                    policy_adapter=policy_adapter,
-                    seed=env_seed,
-                    perturb_cfg=perturb_cfg,
-                    video_size=video_size,
-                    repeat_idx=ri,
-                    skip_expert_check=skip_expert_check,
-                )
+                # Retry loop for transient errors (server crash / websocket 1011)
+                MAX_RETRIES = 3
+                for attempt in range(1, MAX_RETRIES + 1):
+                    result = run_single_episode(
+                        task_name=task_name,
+                        task_env=TASK_ENV,
+                        env_args=copy.deepcopy(ep_env_args),
+                        policy_adapter=policy_adapter,
+                        seed=env_seed,
+                        perturb_cfg=perturb_cfg,
+                        video_size=video_size,
+                        repeat_idx=ri,
+                        skip_expert_check=skip_expert_check,
+                    )
+                    # Only retry on transient eval_error (not expert_failed etc.)
+                    err = result.get("error") or ""
+                    if err.startswith("eval_error") and attempt < MAX_RETRIES:
+                        print(f"  [RETRY {attempt}/{MAX_RETRIES}] {setting_id}/{task_name}/ep{ri}: {err[:80]}")
+                        time.sleep(2)
+                        continue
+                    break
 
                 # Add metadata
                 result["setting_id"] = setting_id

@@ -57,6 +57,41 @@
   monitor usage. Added "RoboTwin Upstream Bug Fixes" section with patches for `open_laptop.py`
   and `place_object_scale.py`. Updated Settings section to show both full (20) and current (5) settings.
 
+### LingbotVA lm20 always_on: transient 1011 root cause & fix (Motus + LingbotVA run)
+
+#### Root Cause (confirmed)
+
+- `websocket 1011 internal error` was **not** due to GPU OOM on 80GB H100.
+- The actual issue was **server routing mismatch**:
+  all 4 benchmark clients were using `configs/lingbot_va.yml` with `port: 29056`, so all clients
+  connected to a single server (GPU4), while servers on ports `29057/29058/29059` were idle.
+- This created high concurrent load on one server process, causing intermittent inference-server
+  crashes and client-side `eval_error: ... 1011`.
+
+#### Fixes Applied
+
+1. **Client-server port affinity fix**
+   - Relaunched 4 LingbotVA clients with per-GPU policy configs:
+     - GPU4 -> port 29056
+     - GPU5 -> port 29057
+     - GPU6 -> port 29058
+     - GPU7 -> port 29059
+   - Added per-GPU config files:
+     `configs/lingbot_va_gpu4.yml`, `configs/lingbot_va_gpu5.yml`,
+     `configs/lingbot_va_gpu6.yml`, `configs/lingbot_va_gpu7.yml`.
+
+2. **Transient error resilience in benchmark runner**
+   - `benchmark/eval_runner.py`: add retry loop (`MAX_RETRIES=3`) for episodes failing with
+     `eval_error` (e.g., temporary websocket/server failures), then persist final result.
+
+3. **Result hygiene**
+   - Deleted existing `eval_error` episode JSONs generated during the misrouted period,
+     then resumed runs so they are regenerated under correct port mapping.
+
+4. **Live monitoring**
+   - Added `scripts/watch_benchmark.py` for real-time monitoring of the current 5 always_on
+     settings (progress, SR/effective-SR, speed, ETA, active settings, top errors, cross-policy view).
+
 #### GPU Allocation (8 GPUs, restarted 2026-03-02 ~11:55 CST)
 
 | GPU | Assignment |

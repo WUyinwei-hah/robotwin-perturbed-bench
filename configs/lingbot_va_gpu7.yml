@@ -1,0 +1,6 @@
+action_guidance_scale: 5.0
+host: 127.0.0.1
+port: 29059
+robotwin_root: /gemini/code/Yinwei/RoboTwin
+save_visualization: false
+video_guidance_scale: 5.0
