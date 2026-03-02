@@ -69,6 +69,19 @@
 - Deleted 85 lingbot episodes that had `expert_failed` / `eval_error` / `expert_check_error`
   without videos, plus 7 orphan video files. Resume mechanism will regenerate them
   with `--skip-expert-check` (directly entering Phase 2 policy evaluation).
+- Deleted 140 Motus error episodes (138 `expert_failed` + 2 `expert_check_error`) across
+  26 (setting, task) combos in `scale`/`coupling`/`iir` settings. All were generated before
+  `--skip-expert-check` was enabled. Restarted all 4 Motus sessions to re-run.
+
+**Bug Fix 3: `envs/put_object_cabinet.py` — `AttributeError: origin_z` in `check_success()`**
+
+- **Root cause**: `origin_z` and `arm_tag` are set in `play_once()`, which is skipped under
+  `--skip-expert-check`. `check_success()` is called at every action step, crashing with
+  `AttributeError: 'put_object_cabinet' object has no attribute 'origin_z'`.
+- **Fix**: Added `hasattr(self, 'origin_z')` and `hasattr(self, 'arm_tag')` guards.
+  Falls back to position-only check when attributes are not yet set.
+- **Impact**: 20 lingbot `scale_lm_always_on/put_object_cabinet` episodes were affected.
+  Deleted and restarted `lingbot_lm20_3` (GPU 7) to pick up fix (Python module cache).
 
 ### LingbotVA lm20 always_on: transient 1011 root cause & fix (Motus + LingbotVA run)
 
