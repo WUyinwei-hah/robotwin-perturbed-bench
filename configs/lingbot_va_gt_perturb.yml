@@ -1,0 +1,12 @@
+# LingbotVA policy configuration for GT perturb override smoke.
+robotwin_root: /gemini/code/robotwin
+
+host: 127.0.0.1
+port: 8000
+video_guidance_scale: 5.0
+action_guidance_scale: 5.0
+save_visualization: false
+
+# When enabled, the adapter forwards the current episode's GT perturb raw scale
+# to the server as `perturb_raw_override` on every chunk.
+perturb_override_mode: gt_raw

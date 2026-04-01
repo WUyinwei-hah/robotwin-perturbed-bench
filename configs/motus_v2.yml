@@ -1,0 +1,7 @@
+# MotusV2 policy configuration for perturbed benchmark
+# Video-conditioned model (9 cond frames + 16 predicted frames)
+
+checkpoint_path: /gemini/code/Motus/checkpoints/robotwin_full_v2/robotwin_full_v2/checkpoint_step_110000
+wan_path: /gemini/code/models/motus_pretrained_models/Wan2.2-TI2V-5B
+vlm_path: /gemini/code/models/motus_pretrained_models/Qwen3-VL-2B-Instruct
+device: cuda

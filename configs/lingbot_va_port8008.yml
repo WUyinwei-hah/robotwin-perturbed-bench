@@ -1,0 +1,9 @@
+# LingbotVA policy configuration - port 8008
+robotwin_root: /gemini/code/robotwin
+
+# Websocket server settings
+host: 127.0.0.1
+port: 8008
+video_guidance_scale: 5.0
+action_guidance_scale: 5.0
+save_visualization: false

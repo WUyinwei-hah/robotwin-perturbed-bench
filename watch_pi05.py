@@ -7,6 +7,7 @@ import json
 import glob
 import argparse
 from datetime import datetime, timedelta
+from pathlib import Path
 
 LOG_DIR = os.path.join(os.path.dirname(__file__), "logs")
 RESULTS_DIR = os.path.join(os.path.dirname(__file__), "results", "Pi05")
@@ -42,6 +43,56 @@ RESET  = "\033[0m"
 START_TIME = datetime(2026, 3, 2, 11, 55, 0)
 
 
+def _read_cmdline(path):
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+        if not raw:
+            return []
+        return [p.decode("utf-8", errors="replace") for p in raw.split(b"\x00") if p]
+    except Exception:
+        return []
+
+
+def is_gpu_worker_alive(gpu_id):
+    """Check whether a benchmark.eval_runner process for this GPU is alive."""
+    proc_dir = Path("/proc")
+    for p in proc_dir.iterdir():
+        if not p.name.isdigit():
+            continue
+        cmd = _read_cmdline(p / "cmdline")
+        if not cmd:
+            continue
+        if "benchmark.eval_runner" not in " ".join(cmd):
+            continue
+        for i, tok in enumerate(cmd):
+            if tok == "--gpu" and i + 1 < len(cmd):
+                try:
+                    if int(cmd[i + 1]) == gpu_id:
+                        return True
+                except ValueError:
+                    pass
+    return False
+
+
+def recent_throughput_ep_per_h(window_minutes=60):
+    """Estimate recent throughput from result file mtimes."""
+    now = time.time()
+    cutoff = now - window_minutes * 60
+    count = 0
+    for setting in SETTINGS_TARGET:
+        path = os.path.join(RESULTS_DIR, setting)
+        if not os.path.isdir(path):
+            continue
+        for ep in glob.glob(os.path.join(path, "**", "episode_*.json"), recursive=True):
+            try:
+                if os.path.getmtime(ep) >= cutoff:
+                    count += 1
+            except OSError:
+                pass
+    return count * 60.0 / max(window_minutes, 1)
+
+
 def strip_ansi(text):
     return re.sub(r'\x1b\[[0-9;]*m', '', text)
 
@@ -66,25 +117,28 @@ def parse_log(gpu_id):
 
     try:
         result["mtime"] = os.path.getmtime(log_path)
-        result["alive"] = (time.time() - result["mtime"]) < 120
+        # Prefer process-level liveness; fallback to long heartbeat window.
+        result["alive"] = is_gpu_worker_alive(gpu_id) or (time.time() - result["mtime"]) < 900
 
         with open(log_path, "rb") as f:
             f.seek(0, 2)
             size = f.tell()
-            read_size = min(8192, size)
+            read_size = min(262144, size)
             f.seek(-read_size, 2)
             tail = strip_ansi(f.read().decode("utf-8", errors="replace"))
 
-        ep_pat = re.compile(
-            r'\[(\d+)/(\d+)\]\s+(\S+)\s+(SUCC|FAIL)\s+steps=\d+(?:\s+rate=\S+)?\s+ETA=(\d+)min'
+        # Parse progress even when the last lines don't include SUCC/FAIL yet.
+        progress_pat = re.compile(
+            r'\[(\d+)/(\d+)\]\s+(\S+)(?:\s+(SUCC|FAIL|SKIP))?(?:.*?ETA=(\d+)min)?'
         )
-        matches = list(ep_pat.finditer(tail))
+        matches = list(progress_pat.finditer(tail))
         if matches:
             m = matches[-1]
             result["done"]         = int(m.group(1))
             result["total"]        = int(m.group(2))
             result["current_task"] = m.group(3)
-            result["eta_min"]      = int(m.group(5))
+            if m.group(5):
+                result["eta_min"] = int(m.group(5))
 
         with open(log_path, "r", errors="replace") as f:
             content = strip_ansi(f.read())
@@ -236,6 +290,16 @@ def render():
             eta_overall_h = remaining / eps_per_h
             eta_overall_finish = now + timedelta(hours=eta_overall_h)
             print(f"  Throughput: {CYAN}{eps_per_h:.1f} ep/h{RESET}  ETA (avg): {YELLOW}{eta_overall_h:.1f}h{RESET} → ~{eta_overall_finish.strftime('%m/%d %H:%M')}")
+
+    recent_eps_per_h = recent_throughput_ep_per_h(window_minutes=60)
+    remaining = GRAND_TOTAL - total_done
+    if recent_eps_per_h > 0 and remaining > 0:
+        eta_recent_h = remaining / recent_eps_per_h
+        eta_recent_finish = now + timedelta(hours=eta_recent_h)
+        print(
+            f"  Throughput(60m): {CYAN}{recent_eps_per_h:.1f} ep/h{RESET}  "
+            f"ETA (recent): {YELLOW}{eta_recent_h:.1f}h{RESET} → ~{eta_recent_finish.strftime('%m/%d %H:%M')}"
+        )
 
     print()
     print(f"  {BOLD}{'=' * 78}{RESET}")

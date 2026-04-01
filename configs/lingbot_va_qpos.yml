@@ -1,0 +1,10 @@
+# LingbotVA qpos policy configuration for perturbed benchmark.
+# The qpos Lingbot-VA server must be launched separately before running.
+
+robotwin_root: /gemini/code/robotwin
+
+host: 127.0.0.1
+port: 8000
+video_guidance_scale: 5.0
+action_guidance_scale: 1.0
+save_visualization: false

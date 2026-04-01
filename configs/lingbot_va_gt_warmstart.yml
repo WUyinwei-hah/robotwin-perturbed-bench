@@ -1,0 +1,15 @@
+# LingbotVA policy configuration for GT warm-start drift-hypothesis tests.
+robotwin_root: /gemini/code/robotwin
+
+host: 127.0.0.1
+port: 8000
+video_guidance_scale: 5.0
+action_guidance_scale: 5.0
+save_visualization: false
+
+# Execute GT relative EEF actions for the first N chunks, then continue with the
+# model using the resulting GT-conditioned cache/observations.
+gt_warmstart_chunks: 2
+gt_warmstart_frame_chunk_size: 2
+gt_warmstart_action_per_frame: 16
+gt_warmstart_dataset_root: /gemini/code/datasets/robotwin-perturbed-recovery-50fps/adjust_bottle-aloha-perturbed_recovery

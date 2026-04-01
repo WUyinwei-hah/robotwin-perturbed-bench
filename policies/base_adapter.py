@@ -45,6 +45,19 @@ class PolicyAdapter(ABC):
         """
         ...
 
+    def set_episode_context(
+        self,
+        *,
+        perturbation_log: Optional[Dict[str, Any]] = None,
+        setting_id: Optional[str] = None,
+        repeat_idx: Optional[int] = None,
+    ) -> None:
+        """Optional hook for per-episode context before reset.
+
+        Adapters that do not need this information can ignore it.
+        """
+        return None
+
     @property
     @abstractmethod
     def action_type(self) -> str:

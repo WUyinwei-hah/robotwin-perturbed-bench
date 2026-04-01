@@ -135,6 +135,101 @@ def generate_instruction(task_name: str, episode_info_list: list, test_num: int,
 # Core evaluation loop
 # ============================================================
 
+def _save_action_log(action_log: list, path: Path) -> None:
+    """Pack action log arrays into a single .npz file.
+
+    Keys:
+        raw_chunk_0, raw_chunk_1, ...       — raw model output per chunk
+        denormed_chunk_0, denormed_chunk_1, ... — denormed per chunk
+        executed                            — all executed actions concatenated (N, 16)
+        observed_states                     — observed 16D EEF states from env at
+                                              the client-side observation update points
+        observed_action_steps               — cumulative executed-action count for
+                                              each observed state sample
+    """
+    arrays = {}
+    all_executed = []
+    all_observed_states = []
+    all_observed_action_steps = []
+    all_tracked_actor_pose = []
+    all_tracked_actor_functional_point = []
+    all_tracked_actor_gripper_contact = []
+    all_tracked_actor_gripper_contact_count = []
+    all_tracked_actor_observed_action_steps = []
+    all_tracked_actor_contact_links = []
+    tracked_actor_name = None
+    tracked_actor_attr = None
+    for ci, chunk in enumerate(action_log):
+        if chunk.get("actions_raw") is not None:
+            arrays[f"raw_chunk_{ci}"] = np.asarray(chunk["actions_raw"])
+        if chunk.get("actions_denormed") is not None:
+            arrays[f"denormed_chunk_{ci}"] = np.asarray(chunk["actions_denormed"])
+        if chunk.get("actions_executed"):
+            all_executed.extend(chunk["actions_executed"])
+        if chunk.get("observed_states"):
+            all_observed_states.extend(chunk["observed_states"])
+        if chunk.get("observed_action_steps"):
+            all_observed_action_steps.extend(chunk["observed_action_steps"])
+        if chunk.get("tracked_actor_pose"):
+            all_tracked_actor_pose.extend(chunk["tracked_actor_pose"])
+        if chunk.get("tracked_actor_functional_point"):
+            all_tracked_actor_functional_point.extend(chunk["tracked_actor_functional_point"])
+        if chunk.get("tracked_actor_gripper_contact"):
+            all_tracked_actor_gripper_contact.extend(chunk["tracked_actor_gripper_contact"])
+        if chunk.get("tracked_actor_gripper_contact_count"):
+            all_tracked_actor_gripper_contact_count.extend(chunk["tracked_actor_gripper_contact_count"])
+        if chunk.get("tracked_actor_observed_action_steps"):
+            all_tracked_actor_observed_action_steps.extend(chunk["tracked_actor_observed_action_steps"])
+        if chunk.get("tracked_actor_contact_links"):
+            all_tracked_actor_contact_links.extend(chunk["tracked_actor_contact_links"])
+        if chunk.get("tracked_actor_name"):
+            tracked_actor_name = chunk["tracked_actor_name"]
+        if chunk.get("tracked_actor_attr"):
+            tracked_actor_attr = chunk["tracked_actor_attr"]
+    if all_executed:
+        arrays["executed"] = np.array(all_executed)
+    if all_observed_states:
+        arrays["observed_states"] = np.asarray(all_observed_states, dtype=np.float32)
+    if all_observed_action_steps:
+        arrays["observed_action_steps"] = np.asarray(all_observed_action_steps, dtype=np.int32)
+    if all_tracked_actor_pose:
+        arrays["tracked_actor_pose"] = np.asarray(all_tracked_actor_pose, dtype=np.float32)
+    if all_tracked_actor_functional_point:
+        arrays["tracked_actor_functional_point"] = np.asarray(all_tracked_actor_functional_point, dtype=np.float32)
+    if all_tracked_actor_gripper_contact:
+        arrays["tracked_actor_gripper_contact"] = np.asarray(all_tracked_actor_gripper_contact, dtype=np.bool_)
+    if all_tracked_actor_gripper_contact_count:
+        arrays["tracked_actor_gripper_contact_count"] = np.asarray(all_tracked_actor_gripper_contact_count, dtype=np.int32)
+    if all_tracked_actor_observed_action_steps:
+        arrays["tracked_actor_observed_action_steps"] = np.asarray(all_tracked_actor_observed_action_steps, dtype=np.int32)
+    if all_tracked_actor_contact_links:
+        arrays["tracked_actor_contact_links_json"] = np.asarray(
+            [json.dumps(v, ensure_ascii=True) for v in all_tracked_actor_contact_links],
+            dtype=object,
+        )
+    if tracked_actor_name is not None:
+        arrays["tracked_actor_name"] = np.asarray([tracked_actor_name], dtype=object)
+    if tracked_actor_attr is not None:
+        arrays["tracked_actor_attr"] = np.asarray([tracked_actor_attr], dtype=object)
+    np.savez_compressed(str(path), **arrays)
+
+
+def _save_causal_meta(action_log: list, path: Path) -> None:
+    records = []
+    for ci, chunk in enumerate(action_log):
+        causal_meta = chunk.get("causal_meta")
+        if causal_meta is None:
+            continue
+        records.append({
+            "chunk_idx": ci,
+            **causal_meta,
+        })
+    if not records:
+        return
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(_numpy_to_list(records), f, indent=2)
+
+
 def run_single_episode(
     task_name: str,
     task_env,
@@ -233,6 +328,15 @@ def run_single_episode(
         wrapper = PerturbedEnvWrapper(task_env, perturb_cfg)
         wrapper.activate()
 
+        if hasattr(policy_adapter, "set_episode_context"):
+            policy_adapter.set_episode_context(
+                perturbation_log=perturb_cfg.to_dict(),
+                setting_id=None,
+                repeat_idx=repeat_idx,
+                seed=seed,
+                task_name=task_name,
+            )
+
         # Reset policy
         policy_adapter.reset(task_env, instruction)
 
@@ -245,6 +349,11 @@ def run_single_episode(
                 succ = True
                 break
 
+        # Collect action log from policy adapter (if supported)
+        action_log = None
+        if hasattr(policy_adapter, 'get_action_log'):
+            action_log = policy_adapter.get_action_log()
+
         # Cleanup
         wrapper.deactivate()
         result["perturbation_log"] = wrapper.get_perturbation_log()
@@ -254,6 +363,7 @@ def run_single_episode(
 
         result["success"] = succ
         result["steps"] = task_env.take_action_cnt
+        result["action_log"] = action_log
 
         task_env.close_env(clear_cache=True)
 
@@ -422,8 +532,16 @@ def run_benchmark(
                 result["timestamp"] = datetime.now().isoformat()
 
                 # Save result
+                action_log = result.pop("action_log", None)
                 with open(result_file, "w") as f:
                     json.dump(_numpy_to_list(result), f, indent=2)
+
+                # Save action log as .npz (if available)
+                if action_log:
+                    action_log_file = result_dir / f"actions_episode_{ri}.npz"
+                    _save_action_log(action_log, action_log_file)
+                    causal_meta_file = result_dir / f"causal_episode_{ri}.json"
+                    _save_causal_meta(action_log, causal_meta_file)
 
                 if result["success"]:
                     task_successes += 1
@@ -464,12 +582,18 @@ def create_policy_adapter(policy_name: str, policy_config: Dict[str, Any]):
     if policy_name == "motus":
         from policies.motus_adapter import MotusAdapter
         adapter = MotusAdapter()
+    elif policy_name == "motus_v2":
+        from policies.motus_v2_adapter import MotusV2Adapter
+        adapter = MotusV2Adapter()
     elif policy_name == "pi05":
         from policies.pi05_adapter import Pi05Adapter
         adapter = Pi05Adapter()
     elif policy_name == "lingbot_va":
         from policies.lingbot_va_adapter import LingbotVAAdapter
         adapter = LingbotVAAdapter()
+    elif policy_name == "lingbot_va_qpos":
+        from policies.lingbot_va_qpos_adapter import LingbotVAQPosAdapter
+        adapter = LingbotVAQPosAdapter()
     else:
         raise ValueError(f"Unknown policy: {policy_name}")
 
@@ -480,7 +604,7 @@ def create_policy_adapter(policy_name: str, policy_config: Dict[str, Any]):
 def main():
     parser = argparse.ArgumentParser(description="Perturbed RoboTwin Benchmark Runner")
     parser.add_argument("--policy", type=str, required=True,
-                        choices=["motus", "pi05", "lingbot_va"],
+                        choices=["motus", "motus_v2", "pi05", "lingbot_va", "lingbot_va_qpos"],
                         help="Policy to evaluate")
     parser.add_argument("--policy-config", type=str, required=True,
                         help="Path to policy-specific YAML config")

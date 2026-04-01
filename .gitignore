@@ -35,6 +35,8 @@ logs/
 # Temporary files
 *.tmp
 *.bak
+benchmark/tmp_*.json
+benchmark/*.bak*
 
 # Model weights (too large for git)
 *.pt
@@ -46,9 +48,13 @@ logs/
 # Videos
 *.mp4
 *.avi
+samples/
 
 # Verified spec generation artifacts (intermediate parts)
 verified_spec_parts/
+policies/motus_v2_policy/experiments/
+policies/motus_v2_policy/models
+policies/motus_v2_policy/bak
 
 # Symlinks (recreated per-machine, see README)
 envs

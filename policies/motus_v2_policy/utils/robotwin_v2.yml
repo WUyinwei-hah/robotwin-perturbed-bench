@@ -1,0 +1,40 @@
+# Configuration for MotusV2
+
+common:
+  # Robot dimensions
+  action_dim: 14         # Robot action dimension
+  state_dim: 14          # Robot state dimension
+  
+  # Video settings  
+  num_video_frames: 16   # Number of video frames to predict (V2: 16)
+  video_height: 384      # Video frame height
+  video_width: 320       # Video frame width
+  
+  # V2 frame settings
+  num_condition_frames: 9    # 9 condition frames (3 latent)
+  num_predicted_frames: 16   # 16 predicted frames (4 latent)
+
+  # Sampling strategy parameters
+  global_downsample_rate: 3     # Global downsampling (e.g., 30Hz -> 10Hz)
+  video_action_freq_ratio: 2    # Video:Action frequency ratio
+
+# Model configuration
+model:
+  # Action Expert configuration
+  action_expert:
+    hidden_size: 1024       # Hidden dimension
+    ffn_dim_multiplier: 4   # FFN = hidden_size * multiplier
+    norm_eps: 1e-5          # Layer norm epsilon
+  
+  # Understanding Expert configuration
+  und_expert:
+    hidden_size: 512        # Hidden dimension
+    ffn_dim_multiplier: 4   # FFN = hidden_size * multiplier
+    norm_eps: 1e-5          # Layer norm epsilon
+    vlm:
+      input_dim: 2048       # VLM feature dimension
+      projector_type: "mlp3x_silu"
+    
+  # Inference settings
+  inference:
+    num_inference_timesteps: 10   # Number of denoising steps during inference
