@@ -27,6 +27,33 @@ The active Pi0.5 evaluation uses a **reduced spec** (`benchmark_spec_lm20.json`)
   so Phase 1 expert check (CuroboPlanner IK) is skipped to avoid false `expert_failed` errors
   and to ensure every episode produces a video.
 
+## High-Severity Follow-Up (high20 subset)
+
+For follow-up experiments that need stronger perturbations, use
+`benchmark/benchmark_spec_high20.json`.
+
+- Source: filtered from `benchmark/benchmark_spec_verified.json`
+- Scope: **3 high `always_on` settings** × **50 tasks** × **20 repeats** = **3,000 episodes per policy**
+- Included settings: `bias_high_always_on`, `iir_high_always_on`, `fir_high_always_on`
+- `scale_high_always_on` and `coupling_high_always_on` are excluded from this focused follow-up run
+
+Example:
+
+```bash
+python scripts/filter_benchmark_spec.py \
+    --input benchmark/benchmark_spec_verified.json \
+    --output benchmark/benchmark_spec_high20.json \
+    --severity high \
+    --timing always_on
+
+python -m benchmark.eval_runner \
+    --policy motus \
+    --policy-config configs/motus.yml \
+    --spec benchmark/benchmark_spec_high20.json \
+    --task-config demo_clean \
+    --settings bias_high_always_on,iir_high_always_on,fir_high_always_on
+```
+
 ### Current Motus + LingbotVA run (8 GPUs)
 
 | GPU | Policy | Config | Port |
@@ -47,6 +74,36 @@ Monitor progress:
 python scripts/watch_benchmark.py           # refresh every 30s
 python scripts/watch_benchmark.py --once    # single snapshot
 ```
+
+### Current checked-in comparison snapshot (`results/`)
+
+For the current **Motus vs. LingbotVA** comparison subset used in our notes, we only
+look at:
+
+- `scale_lm_always_on`
+- `coupling_lm_always_on`
+- `bias_high_always_on`
+
+This subset corresponds to **3 settings × 50 tasks × 20 repeats = 3,000 episodes per policy**.
+
+Results are stored under:
+
+- `results/Motus/<setting>/<task>/episode_<n>.json`
+- `results/lingbot/<setting>/<task>/episode_<n>.json`
+
+Current success rates from the checked-in `results/` tree:
+
+| Policy | `scale_lm_always_on` | `coupling_lm_always_on` | `bias_high_always_on` | Total |
+|---|---:|---:|---:|---:|
+| Motus | 269/1000 (26.9%) | 134/1000 (13.4%) | 120/1000 (12.0%) | 523/3000 (17.4%) |
+| lingbot | 324/1000 (32.4%) | 174/1000 (17.4%) | 157/1000 (15.7%) | 655/3000 (21.8%) |
+
+Notes:
+
+- All three settings above are fully populated in the current `results/` snapshot.
+- For LM `always_on` per-task summaries, see `reports/task_policy_setting_avg_success_steps.csv`.
+- For the full high-severity follow-up report (`bias/iir/fir`), see
+  `reports/high_focus/report.md` and `reports/high_focus/report.json`.
 
 ## Directory Structure
 
@@ -597,7 +654,8 @@ If using SSH:
 |------|----------|-------|---------|-------------|-------------|
 | `benchmark/benchmark_spec.json` | 20 (all) | 50 | 50 | 50,000 | Full benchmark (all severities) |
 | `benchmark/benchmark_spec_lm20.json` | 10 (lm only) | 50 | 20 | 10,000 | Compact benchmark for quick multi-machine eval |
-| `benchmark/benchmark_spec_verified.json` | 10 (lm) | 50 | 20 | 10,000 | Verified perturbations (generated via `generate_verified_spec.py`) |
+| `benchmark/benchmark_spec_high20.json` | 3 (high always_on) | 50 | 20 | 3,000 | Focused high-severity always_on benchmark for bias/iir/fir follow-up runs |
+| `benchmark/benchmark_spec_verified.json` | 20 (lm + high) | 50 | 20 | 20,000 | Verified perturbations across both severities (generated via `generate_verified_spec.py`) |
 
 ## Settings
 
