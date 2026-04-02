@@ -1,8 +1,8 @@
 """
 Perturbation Engine for Perturbed RoboTwin Benchmark (forked from Motus v1.3)
 
-Supports 5 perturbation types: Scale, Coupling, Low-pass IIR/FIR, Bias.
-Drop is excluded from the benchmark.
+Supports 6 perturbation types: Scale, Coupling, Scale+Coupling+Bias,
+Low-pass IIR/FIR, Bias. Drop is excluded from the benchmark.
 
 Two timing modes:
   - always_on:        active from step 0 to episode end
@@ -48,6 +48,7 @@ DELTA_MAX_DEFAULT = np.full(ACTION_DIM, 0.5, dtype=np.float32)
 class PerturbationType(str, Enum):
     SCALE = "scale"
     COUPLING = "coupling"
+    SCALE_COUPLING_BIAS = "scale_coupling_bias"
     LOWPASS_IIR = "lowpass_iir"
     LOWPASS_FIR = "lowpass_fir"
     BIAS = "bias"
@@ -269,6 +270,90 @@ class CouplingPerturbation(BasePerturbation):
 
 
 # ============================================================
+# Composite Scale + Coupling + Bias Perturbation
+# ============================================================
+
+def compose_scale_coupling_matrix(
+    S: np.ndarray,
+    M: np.ndarray,
+) -> np.ndarray:
+    """Compose one increment matrix A from scale and coupling parts.
+
+    The diagonal entries come from S, while the cross-joint coupling entries
+    come from the off-diagonal part of M. This mirrors the multitype Motus
+    training-data engine so benchmark mixed episodes share the same forward
+    semantics as the generated dataset.
+    """
+    A = np.eye(ACTION_DIM, dtype=np.float32)
+    A[np.arange(ACTION_DIM), np.arange(ACTION_DIM)] = S.astype(np.float32)
+
+    E = M.astype(np.float32) - np.eye(ACTION_DIM, dtype=np.float32)
+    for g in GRIPPER_DIMS:
+        E[g, :] = 0.0
+        E[:, g] = 0.0
+    A += E
+
+    for g in GRIPPER_DIMS:
+        A[g, :] = 0.0
+        A[:, g] = 0.0
+        A[g, g] = 1.0
+    return A
+
+
+class ScaleCouplingBiasPerturbation(BasePerturbation):
+    """Composite perturbation over increment distortion plus output bias.
+
+    Internal unbiased channel state:
+      x_t = x_{t-1} + A @ (u_t - u_{t-1})
+
+    Output sent to the environment:
+      a_t = x_t + b
+
+    Important implementation detail:
+      - state.u_prev stores the last raw command u_{t-1}
+      - state.a_prev stores the unbiased internal state x_{t-1}, not the
+        biased output a_{t-1}
+    """
+
+    def __init__(self, cfg: PerturbationConfig, state: PerturbationState):
+        super().__init__(cfg, state)
+        params = cfg.params
+        if "A" in params:
+            self.A = np.array(params["A"], dtype=np.float32)
+        else:
+            self.A = compose_scale_coupling_matrix(
+                np.array(params["S"], dtype=np.float32),
+                np.array(params["M"], dtype=np.float32),
+            )
+        self.b = np.array(params["b"], dtype=np.float32)
+
+        assert self.A.shape == (ACTION_DIM, ACTION_DIM), f"A must be [14,14], got {self.A.shape}"
+        assert self.b.shape == (ACTION_DIM,), f"b must be [14], got {self.b.shape}"
+
+        for g in GRIPPER_DIMS:
+            self.A[g, :] = 0.0
+            self.A[:, g] = 0.0
+            self.A[g, g] = 1.0
+            self.b[g] = 0.0
+
+    def apply(self, u_t: np.ndarray) -> np.ndarray:
+        if not self.active:
+            return self._passthrough(u_t)
+
+        du = u_t - self.state.u_prev
+        x_t = self.state.a_prev + self.A @ du
+        a_t = x_t.copy()
+        a_t[JOINT_MASK] = x_t[JOINT_MASK] + self.b[JOINT_MASK]
+        a_t[~JOINT_MASK] = u_t[~JOINT_MASK]
+
+        # Keep the internal unbiased channel state for the next step.
+        self.state.u_prev = u_t.copy()
+        self.state.a_prev = x_t.copy()
+        self.state.step_raw += 1
+        return a_t
+
+
+# ============================================================
 # Low-pass IIR Perturbation
 # ============================================================
 
@@ -368,6 +453,7 @@ class BiasPerturbation(BasePerturbation):
 PERTURBATION_CLASSES = {
     PerturbationType.SCALE: ScalePerturbation,
     PerturbationType.COUPLING: CouplingPerturbation,
+    PerturbationType.SCALE_COUPLING_BIAS: ScaleCouplingBiasPerturbation,
     PerturbationType.LOWPASS_IIR: LowPassIIRPerturbation,
     PerturbationType.LOWPASS_FIR: LowPassFIRPerturbation,
     PerturbationType.BIAS: BiasPerturbation,
@@ -401,6 +487,8 @@ def sample_perturbation_params(
         return _sample_scale_params(severity, rng)
     elif perturb_type == PerturbationType.COUPLING:
         return _sample_coupling_params(severity, rng)
+    elif perturb_type == PerturbationType.SCALE_COUPLING_BIAS:
+        return _sample_scale_coupling_bias_params(severity, rng)
     elif perturb_type == PerturbationType.LOWPASS_IIR:
         return _sample_iir_params(severity, rng)
     elif perturb_type == PerturbationType.LOWPASS_FIR:
@@ -490,3 +578,32 @@ def _sample_bias_params(severity: Severity, rng: np.random.Generator) -> Dict[st
     for j in JOINT_DIMS:
         b[j] = rng.uniform(-b_max, b_max)
     return {"b": b}
+
+
+def _sample_scale_coupling_bias_params(
+    severity: Severity,
+    rng: np.random.Generator,
+) -> Dict[str, Any]:
+    """Sample a stable composite matrix A plus bias b.
+
+    We keep the original S/M parts in the params for auditability and to match
+    the Motus multitype dataset JSON, but benchmark forward execution uses the
+    composed A directly.
+    """
+    max_attempts = 16
+    last = None
+    for _ in range(max_attempts):
+        S = np.array(_sample_scale_params(severity, rng)["S"], dtype=np.float32)
+        M = np.array(_sample_coupling_params(severity, rng)["M"], dtype=np.float32)
+        b = np.array(_sample_bias_params(severity, rng)["b"], dtype=np.float32)
+        A = compose_scale_coupling_matrix(S, M)
+        cond = np.linalg.cond(A)
+        last = {"A": A, "S": S, "M": M, "b": b, "cond_A": float(cond)}
+        if np.isfinite(cond) and cond <= 25:
+            return last
+
+    logger.warning(
+        "Composite perturbation fell back to last sampled matrix with cond(A)=%.2f",
+        last["cond_A"] if last is not None else float("nan"),
+    )
+    return last

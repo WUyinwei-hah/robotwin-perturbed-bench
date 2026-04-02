@@ -419,6 +419,7 @@ def make_setting_id(perturb_type: PerturbationType, severity: Severity, timing: 
     type_short = {
         PerturbationType.SCALE: "scale",
         PerturbationType.COUPLING: "coupling",
+        PerturbationType.SCALE_COUPLING_BIAS: "mixed",
         PerturbationType.LOWPASS_IIR: "iir",
         PerturbationType.LOWPASS_FIR: "fir",
         PerturbationType.BIAS: "bias",
